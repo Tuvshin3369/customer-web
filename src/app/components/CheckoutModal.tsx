@@ -1,0 +1,1049 @@
+import { useState, useMemo, useEffect, useRef } from 'react';
+import {
+  X, Phone, Building2, FileText, Hash, Map,
+  MapPin, Navigation, Truck, CheckCircle2, AlertCircle,
+  Loader2, RefreshCw, Route, Store, Gift, ChevronLeft, ChevronDown,
+  Copy, Check,
+} from 'lucide-react';
+import { CartItem } from '../types';
+import { MapPickerModal, PickedLocation } from './MapPickerModal';
+import { calculateDistanceKm } from '../utils/haversine';
+import { projectId, publicAnonKey } from '/utils/supabase/info';
+import { PaymentInfoCard } from './PaymentInfoCard';
+
+// ─── Static bank details ──────────────────────────────────────────────────────
+const BANK_NAME    = 'Хаан Банк';
+const BANK_ACCOUNT = '5001234567';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+type DeliveryType  = 'pickup' | 'taxi' | 'delivery';
+type WizardStep    = 1 | 2 | 3;
+
+interface Branch {
+  id:          number;
+  address_lat: number;
+  address_lng: number;
+}
+
+interface StoreConfig {
+  base_price_per_km:       number;
+  min_delivery_fee:        number;
+  free_delivery_threshold: number;
+}
+
+interface NearestBranchResult {
+  branch:     Branch;
+  distanceKm: number;
+  displayKm:  number;
+}
+
+interface GeoLocation {
+  lat:     number;
+  lng:     number;
+  address: string;
+}
+
+export interface CheckoutModalProps {
+  isOpen:     boolean;
+  onClose:    () => void;
+  items:      CartItem[];
+  grandTotal: number;
+}
+
+// ─── Step meta ────────────────────────────────────────────────────────────────
+const STEP_LABELS: Record<WizardStep, string> = {
+  1: 'Хүлээн авах',
+  2: 'Хүргэлт',
+  3: 'Төлбөр',
+};
+
+// ─── Main component ───────────────────────────────────────────────────────────
+export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutModalProps) {
+
+  // ── Derive store_id from cart (all items share the same store) ─────────────
+  const storeId: string | null = items[0]?.product?.store_id ?? null;
+
+  // ── Sheet animation ────────────────────────────────────────────────────────
+  const [mounted,  setMounted]  = useState(false);
+  const [visible,  setVisible]  = useState(false);
+
+  // ── Refs for auto-focus ────────────────────────────────────────────────────
+  const phoneInputRef = useRef<HTMLInputElement>(null);
+
+  // ── Wizard step + fade transition ─────────────────────────────────────────
+  const [step,        setStep]        = useState<WizardStep>(1);
+  const [stepVisible, setStepVisible] = useState(true);
+
+  function goToStep(next: WizardStep) {
+    setStepVisible(false);
+    setTimeout(() => {
+      setStep(next);
+      setStepVisible(true);
+    }, 160);
+  }
+
+  // ── Branches (fetched from DB — location only) ────────────────────────────
+  const [branches,          setBranches]          = useState<Branch[]>([]);
+  const [isLoadingBranches, setIsLoadingBranches] = useState(false);
+  const [branchesError,     setBranchesError]     = useState('');
+
+  // ── Store config (fetched from DB — pricing) ──────────────────────────────
+  const [store,          setStore]          = useState<StoreConfig | null>(null);
+  const [isLoadingStore, setIsLoadingStore] = useState(false);
+  const [storeError,     setStoreError]     = useState('');
+
+  // ── Step 1 — ХҮЛЭЭН АВАХ ─────────────────────────────────────────────────
+  const [phone,        setPhone]        = useState('');
+  const [orgName,      setOrgName]      = useState('');
+  const [register,     setRegister]     = useState('');
+  const [note,         setNote]         = useState('');
+  const [phoneError,   setPhoneError]   = useState('');
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [orgExpanded,  setOrgExpanded]  = useState(false);
+
+  // ── Step 2 — ХҮРГЭЛТ ─────────────────────────────────────────────────────
+  const [deliveryType,  setDeliveryType]  = useState<DeliveryType>('pickup');
+  const [location,      setLocation]      = useState<GeoLocation | null>(null);
+  const [isLocating,    setIsLocating]    = useState(false);
+  const [locationError, setLocationError] = useState('');
+  const [isMapOpen,     setIsMapOpen]     = useState(false);
+
+  // ── Step 3 — ТӨЛБӨР ──────────────────────────────────────────────────────
+  // (no paymentMethod state needed anymore)
+
+  // ── Submit ────────────────────────────────────────────────────────────────
+  const [submitted,    setSubmitted]    = useState(false);
+  const [copiedTotal,  setCopiedTotal]  = useState(false);
+
+  function handleCopyTotal() {
+    const text = finalTotal.toLocaleString();
+    navigator.clipboard.writeText(text).catch(() => {
+      try {
+        const el = document.createElement('textarea');
+        el.value = text;
+        el.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+        document.body.appendChild(el);
+        el.focus(); el.select();
+        document.execCommand('copy');
+        document.body.removeChild(el);
+      } catch { /* silent */ }
+    });
+    setCopiedTotal(true);
+    setTimeout(() => setCopiedTotal(false), 1500);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  REACTIVE CALCULATION CHAIN
+  // ────────────────────────────────────────────────────────────────────────���
+
+  const nearestBranchResult = useMemo<NearestBranchResult | null>(() => {
+    if (deliveryType !== 'delivery') return null;
+    if (!location || branches.length === 0) return null;
+    let nearest = branches[0];
+    let minDist = Infinity;
+    for (const branch of branches) {
+      const d = calculateDistanceKm(
+        branch.address_lat, branch.address_lng,
+        location.lat,       location.lng,
+      );
+      if (d < minDist) { minDist = d; nearest = branch; }
+    }
+    return { branch: nearest, distanceKm: minDist, displayKm: Number(minDist.toFixed(1)) };
+  }, [deliveryType, location, branches]);
+
+  const deliveryFee = useMemo<number>(() => {
+    if (deliveryType !== 'delivery' || !nearestBranchResult || !store) return 0;
+    if (store.free_delivery_threshold > 0 && grandTotal >= store.free_delivery_threshold) return 0;
+    const calculatedFee = nearestBranchResult.distanceKm * store.base_price_per_km;
+    const rawFee        = Math.max(calculatedFee, store.min_delivery_fee ?? 0);
+    return Math.round(rawFee / 100) * 100;
+  }, [deliveryType, nearestBranchResult, store, grandTotal]);
+
+  const isFreeDelivery = useMemo<boolean>(() => {
+    if (deliveryType !== 'delivery' || !nearestBranchResult || !store) return false;
+    return store.free_delivery_threshold > 0 && grandTotal >= store.free_delivery_threshold;
+  }, [deliveryType, nearestBranchResult, store, grandTotal]);
+
+  const finalTotal = useMemo(() => grandTotal + deliveryFee, [grandTotal, deliveryFee]);
+
+  // ── Fetch branches ───────────────────────────────────────────────────────
+  async function fetchBranches() {
+    setIsLoadingBranches(true);
+    setBranchesError('');
+    try {
+      const res  = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-f6232fa4/branches`,
+        { headers: { Authorization: `Bearer ${publicAnonKey}` } },
+      );
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
+      setBranches(json.data as Branch[]);
+    } catch (err: any) {
+      console.error('fetchBranches error:', err);
+      setBranchesError(err.message || 'Салбарын эдээлэл ачааллаж чадсангүй');
+    } finally {
+      setIsLoadingBranches(false);
+    }
+  }
+
+  // ── Fetch store config ────────────────────────────────────────────────────
+  async function fetchStore() {
+    if (storeId === null) return;
+    setIsLoadingStore(true);
+    setStoreError('');
+    try {
+      const res  = await fetch(
+        `https://${projectId}.supabase.co/functions/v1/make-server-f6232fa4/store?id=${storeId}`,
+        { headers: { Authorization: `Bearer ${publicAnonKey}` } },
+      );
+      const json = await res.json();
+      if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
+      setStore(json.data as StoreConfig);
+    } catch (err: any) {
+      console.error('fetchStore error:', err);
+      setStoreError(err.message || 'Дэлгүүрийн тохиргоо ачааллаж чадсангүй');
+    } finally {
+      setIsLoadingStore(false);
+    }
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (isOpen) {
+      setMounted(true);
+      requestAnimationFrame(() => requestAnimationFrame(() => setVisible(true)));
+      // Reset all fields
+      setStep(1); setStepVisible(true);
+      setPhone(''); setOrgName(''); setRegister(''); setNote('');
+      setPhoneError(''); setPhoneTouched(false);
+      setDeliveryType('pickup');
+      setLocation(null); setLocationError('');
+      setIsMapOpen(false);
+      setSubmitted(false);
+      setOrgExpanded(false);
+      fetchBranches();
+      fetchStore();
+      // Auto-focus phone field after the slide-up animation completes
+      const focusTimer = setTimeout(() => phoneInputRef.current?.focus(), 420);
+      return () => clearTimeout(focusTimer);
+    } else {
+      setVisible(false);
+      const t = setTimeout(() => setMounted(false), 380);
+      return () => clearTimeout(t);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen]);
+
+  // Body scroll lock
+  useEffect(() => {
+    if (isOpen) {
+      const scrollY = window.scrollY;
+      document.body.style.position = 'fixed';
+      document.body.style.top      = `-${scrollY}px`;
+      document.body.style.width    = '100%';
+    } else {
+      const scrollY = Math.abs(parseInt(document.body.style.top || '0', 10));
+      document.body.style.position = '';
+      document.body.style.top      = '';
+      document.body.style.width    = '';
+      window.scrollTo(0, scrollY);
+    }
+    return () => {
+      document.body.style.position = '';
+      document.body.style.top      = '';
+      document.body.style.width    = '';
+    };
+  }, [isOpen]);
+
+  // ── Validation helpers ─────────────────────────────────────────────────
+  function validatePhone(val: string) {
+    if (!val.trim()) return 'Утасны дугаар оруулна уу.';
+    if (!/^\d{8}$/.test(val.replace(/\s/g, ''))) return '8 оронтой дугаар оруулна уу.';
+    return '';
+  }
+
+  function handlePhoneChange(val: string) {
+    const digits = val.replace(/\D/g, '').slice(0, 8);
+    setPhone(digits);
+    if (phoneTouched) setPhoneError(validatePhone(digits));
+  }
+
+  function handlePhoneBlur() {
+    setPhoneTouched(true);
+    setPhoneError(validatePhone(phone));
+  }
+
+  // ── Geolocation ──────────────────────────────────────────────────────────
+  function handleGeolocate() {
+    if (!navigator.geolocation) {
+      setLocationError('Таны төхөөрөмж байршил тодохойлохыг дэмждэггүй.');
+      return;
+    }
+    setIsLocating(true);
+    setLocationError('');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords: { latitude: lat, longitude: lng } }) => {
+        setLocation({ lat, lng, address: `${lat.toFixed(5)}, ${lng.toFixed(5)}` });
+        setIsLocating(false);
+      },
+      () => {
+        setLocationError('Байршил тодорхойлж чадсангүй. Дахин оролдоно уу.');
+        setIsLocating(false);
+      },
+      { timeout: 10_000 },
+    );
+  }
+
+  function handleDeliveryChange(val: DeliveryType) {
+    setDeliveryType(val);
+    if (val !== 'delivery') { setLocation(null); setLocationError(''); }
+  }
+
+  // ── Step navigation ────────────��─────────────────────────────────────────
+  function handleStep1Next() {
+    const err = validatePhone(phone);
+    setPhoneTouched(true);
+    setPhoneError(err);
+    if (err) return;
+    goToStep(2);
+  }
+
+  function handleStep2Next() {
+    goToStep(3);
+  }
+
+  function handleSubmit() {
+    setSubmitted(true);
+  }
+
+  const isLoading = isLoadingBranches || isLoadingStore;
+
+  if (!mounted) return null;
+
+  return (
+    <div className="fixed inset-0 z-[140] flex items-end justify-center md:items-center">
+
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-350"
+        style={{ opacity: visible ? 1 : 0 }}
+        onClick={onClose}
+      />
+
+      {/* Sheet */}
+      <div
+        className="relative w-full max-w-[375px] md:max-w-[480px] lg:max-w-[560px] bg-white rounded-t-2xl md:rounded-2xl shadow-2xl flex flex-col"
+        style={{
+          maxHeight: '95vh',
+          transform: visible ? 'translateY(0)' : 'translateY(100%)',
+          transition: 'transform 0.38s cubic-bezier(0.32,0.72,0,1)',
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Handle — mobile only */}
+        <div className="flex justify-center pt-3 pb-1 shrink-0 md:hidden">
+          <div className="w-10 h-1 rounded-full bg-gray-300" />
+        </div>
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 shrink-0">
+          <div className="flex items-center gap-2">
+            {/* Back arrow on steps 2 & 3 (when not submitted) */}
+            {!submitted && step > 1 && (
+              <button
+                onClick={() => goToStep((step - 1) as WizardStep)}
+                className="w-7 h-7 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors"
+              >
+                <ChevronLeft className="w-4 h-4 text-gray-500" />
+              </button>
+            )}
+            <h2 className="text-base font-semibold text-gray-900">
+              {submitted ? 'Захиалга' : STEP_LABELS[step]}
+            </h2>
+            {isLoading && !submitted && (
+              <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 transition-colors"
+          >
+            <X className="w-4 h-4 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Progress indicator (hidden when submitted) */}
+        {!submitted && (
+          <div className="shrink-0 px-5 pt-4 pb-3">
+            <WizardProgress currentStep={step} />
+          </div>
+        )}
+
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto overscroll-contain">
+          <div
+            style={{
+              opacity:    stepVisible ? 1 : 0,
+              transform:  stepVisible ? 'translateY(0)' : 'translateY(6px)',
+              transition: 'opacity 0.16s ease, transform 0.16s ease',
+            }}
+          >
+            {submitted ? (
+              /* ── Success screen ──────────────────────────────────────── */
+              <div className="flex flex-col items-center justify-center gap-4 py-16 px-6 text-center">
+                <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+                  <CheckCircle2 className="w-8 h-8 text-green-500" />
+                </div>
+                <p className="text-base font-semibold text-gray-900">Захиалга илгээгдлээ!</p>
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  Таны захиалгыг хүлээж авлаа.<br />Удахгүй холбоо барина.
+                </p>
+                <button
+                  onClick={onClose}
+                  className="mt-2 px-8 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors"
+                >
+                  Хаах
+                </button>
+              </div>
+
+            ) : step === 1 ? (
+              /* ═════════════════════════════════════════════════════════
+                 STEP 1 — ХҮЛЭЭН АВАХ
+              ══════════════════════════════════════════════════════════ */
+              <div className="px-5 pt-2 pb-6 space-y-4">
+
+                {/* Phone */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    Утасны дугаар <span className="text-red-500">*</span>
+                  </label>
+                  <div className={`flex items-center gap-2.5 border rounded-xl px-3.5 py-3 transition-colors ${
+                    phoneError
+                      ? 'border-red-400 bg-red-50'
+                      : 'border-gray-200 bg-gray-50 focus-within:border-blue-500 focus-within:bg-white'
+                  }`}>
+                    <Phone className="w-4 h-4 text-gray-400 shrink-0" />
+                    <input
+                      type="tel" inputMode="numeric" placeholder="9900 0000"
+                      ref={phoneInputRef}
+                      value={phone}
+                      onChange={e => handlePhoneChange(e.target.value)}
+                      onBlur={handlePhoneBlur}
+                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                    />
+                  </div>
+                  {phoneError && (
+                    <p className="flex items-center gap-1 text-xs text-red-500 mt-1">
+                      <AlertCircle className="w-3 h-3 shrink-0" />
+                      {phoneError}
+                    </p>
+                  )}
+                </div>
+
+                {/* "Байгууллага бол..." collapsible */}
+                <div className="border border-gray-200 rounded-xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setOrgExpanded(v => !v)}
+                    className="w-full flex items-center justify-between px-3.5 py-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Building2 className="w-4 h-4 text-gray-400" />
+                      <span className="text-xs font-medium text-gray-600">Байгууллага бол...</span>
+                    </div>
+                    <ChevronDown
+                      className="w-4 h-4 text-gray-400 transition-transform duration-200"
+                      style={{ transform: orgExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                    />
+                  </button>
+
+                  <div
+                    style={{
+                      maxHeight: orgExpanded ? '220px' : '0px',
+                      overflow:  'hidden',
+                      transition: 'max-height 0.18s cubic-bezier(0.4,0,0.2,1)',
+                    }}
+                  >
+                    <div className="px-3.5 pt-3 pb-4 space-y-3 bg-white">
+                      {/* Org name */}
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                          Байгууллагын нэр
+                        </label>
+                        <div className="flex items-center gap-2.5 border border-gray-200 bg-gray-50 focus-within:border-blue-500 focus-within:bg-white rounded-xl px-3.5 py-3 transition-colors">
+                          <Building2 className="w-4 h-4 text-gray-400 shrink-0" />
+                          <input
+                            type="text" placeholder="Компанийн нэр"
+                            value={orgName} onChange={e => setOrgName(e.target.value)}
+                            className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                          />
+                        </div>
+                      </div>
+                      {/* Register */}
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                          Регистер
+                        </label>
+                        <div className="flex items-center gap-2.5 border border-gray-200 bg-gray-50 focus-within:border-blue-500 focus-within:bg-white rounded-xl px-3.5 py-3 transition-colors">
+                          <Hash className="w-4 h-4 text-gray-400 shrink-0" />
+                          <input
+                            type="text" placeholder="АА00000000"
+                            value={register} onChange={e => setRegister(e.target.value.toUpperCase())}
+                            className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Note */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    Тэмдэглэл <span className="text-gray-400 text-[10px] ml-1">(заавал биш)</span>
+                  </label>
+                  <div className="flex items-start gap-2.5 border border-gray-200 bg-gray-50 focus-within:border-blue-500 focus-within:bg-white rounded-xl px-3.5 py-3 transition-colors">
+                    <FileText className="w-4 h-4 text-gray-400 shrink-0 mt-0.5" />
+                    <textarea
+                      rows={2} placeholder="Дараа санахын тулд хаана юунд авсан г.м та энд тэмдэглэж болно"
+                      value={note} onChange={e => setNote(e.target.value)}
+                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none resize-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+            ) : step === 2 ? (
+              /* ══════════════════════════════════════════════════════════
+                 STEP 2 — ХҮРГЭЛТ
+              ══════════════════════════════════════════════════════════ */
+              <div className="px-5 pt-2 pb-6 space-y-3">
+
+                {/* Error banners — shown only here where delivery data matters */}
+                {(branchesError || storeError) && (
+                  <div className="space-y-2">
+                    {branchesError && (
+                      <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                        <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                        <p className="flex-1 text-xs text-red-600 leading-snug">{branchesError}</p>
+                        <button onClick={fetchBranches} className="shrink-0 flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700">
+                          <RefreshCw className="w-3 h-3" /> Retry
+                        </button>
+                      </div>
+                    )}
+                    {storeError && (
+                      <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                        <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                        <p className="flex-1 text-xs text-red-600 leading-snug">{storeError}</p>
+                        <button onClick={fetchStore} className="shrink-0 flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700">
+                          <RefreshCw className="w-3 h-3" /> Retry
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Delivery type cards */}
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      {
+                        value: 'pickup' as const,
+                        label: 'Очиж авах',
+                        sub:   'Дэлгүүрээс авна',
+                        icon:  <Store className="w-4 h-4" />,
+                        badge: <span className="text-[10px] font-bold text-green-600">Үнэгүй</span>,
+                      },
+                      {
+                        value: 'taxi' as const,
+                        label: 'Такси',
+                        sub:   'Жолоочид төлнө',
+                        icon:  <Truck className="w-4 h-4" />,
+                        badge: <span className="text-[10px] font-bold text-green-600">Үнэгүй</span>,
+                      },
+                      {
+                        value: 'delivery' as const,
+                        label: 'Хүргүүлнэ',
+                        sub:   'Манай хүргэлт',
+                        icon:  <MapPin className="w-4 h-4" />,
+                        badge: isLoadingBranches
+                          ? <Loader2 className="w-3 h-3 animate-spin text-gray-300" />
+                          : <span className="text-[10px] text-gray-400">км тооцоо</span>,
+                      },
+                    ] as const
+                  ).map(({ value, label, sub, icon, badge }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => handleDeliveryChange(value)}
+                      className={`flex flex-col items-start gap-2 p-3 rounded-xl border text-left transition-colors ${
+                        deliveryType === value
+                          ? 'border-blue-500 bg-blue-50'
+                          : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+                      }`}
+                    >
+                      <div className={deliveryType === value ? 'text-blue-600' : 'text-gray-400'}>
+                        {icon}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-semibold leading-tight ${
+                          deliveryType === value ? 'text-blue-700' : 'text-gray-700'
+                        }`}>
+                          {label}
+                        </p>
+                        <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{sub}</p>
+                      </div>
+                      {badge}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Очиж авах info */}
+                {deliveryType === 'pickup' && (
+                  <div className="flex items-start gap-2.5 bg-green-50 border border-green-200 rounded-xl px-3.5 py-3">
+                    <Store className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-green-700 leading-relaxed">Дэгүүрээс өөрөө авна</p>
+                  </div>
+                )}
+
+                {/* Такси info */}
+                {deliveryType === 'taxi' && (
+                  <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-3">
+                    <Truck className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-700 leading-relaxed">Таксины төлбөрийг жолоочид төлнө</p>
+                  </div>
+                )}
+
+                {/* Хүргүүлнэ — free threshold progress */}
+                {deliveryType === 'delivery' && store && store.free_delivery_threshold > 0 && (
+                  <FreeDeliveryProgress
+                    cartTotal={grandTotal}
+                    threshold={store.free_delivery_threshold}
+                    isFree={isFreeDelivery}
+                  />
+                )}
+
+                {/* Хүргүүлнэ — location picker */}
+                {deliveryType === 'delivery' && (
+                  <div className="space-y-2.5">
+                    <p className="text-xs font-medium text-gray-600">Хүргэлтийн байршил</p>
+
+                    <button
+                      type="button"
+                      onClick={handleGeolocate}
+                      disabled={isLocating}
+                      className="flex items-center gap-2 w-full border border-blue-200 bg-blue-50 hover:bg-blue-100 active:opacity-70 rounded-xl px-3.5 py-2.5 transition-colors disabled:opacity-50"
+                    >
+                      <Navigation className={`w-4 h-4 text-blue-600 shrink-0 ${isLocating ? 'animate-pulse' : ''}`} />
+                      <span className="text-sm font-medium text-blue-700">
+                        {isLocating ? 'Байршил тодорхойлж байна…' : 'Миний байршил'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsMapOpen(true)}
+                      className="flex items-center gap-2 w-full border border-gray-200 bg-gray-50 hover:bg-gray-100 active:opacity-70 rounded-xl px-3.5 py-2.5 transition-colors"
+                    >
+                      <Map className="w-4 h-4 text-gray-500 shrink-0" />
+                      <span className="text-sm text-gray-700 font-medium">Газрын зургаас сонгох</span>
+                    </button>
+
+                    {location ? (
+                      <div className="flex items-start gap-2.5 bg-green-50 border border-green-200 rounded-xl px-3.5 py-3">
+                        <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-semibold text-green-700 mb-0.5">Байршил тохируулагдлаа</p>
+                          <p className="text-sm text-green-800 leading-snug">{location.address}</p>
+                          <p className="text-[10px] text-green-600 mt-1 font-mono">
+                            {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsMapOpen(true)}
+                          className="shrink-0 text-[10px] font-semibold text-green-600 bg-green-100 hover:bg-green-200 rounded-lg px-2 py-1 transition-colors"
+                        >
+                          Өөрчлөх
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl border border-dashed border-amber-300 bg-amber-50">
+                        <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                        <p className="text-xs text-amber-600 font-medium">Байршил сонгоно уу</p>
+                      </div>
+                    )}
+
+                    {locationError && (
+                      <p className="flex items-center gap-1 text-xs text-red-500">
+                        <AlertCircle className="w-3 h-3 shrink-0" />
+                        {locationError}
+                      </p>
+                    )}
+
+                    <DeliveryFeeCard
+                      location={location}
+                      isLoading={isLoading}
+                      dataError={branchesError || storeError}
+                      nearestBranchResult={nearestBranchResult}
+                      store={store}
+                      deliveryFee={deliveryFee}
+                      isFreeDelivery={isFreeDelivery}
+                      onRetry={() => { fetchBranches(); fetchStore(); }}
+                    />
+                  </div>
+                )}
+              </div>
+
+            ) : (
+              /* ══════════════════════════════════════════════════════════
+                 STEP 3 — ТӨЛБӨР
+              ══════════════════════════════════════════════════════════ */
+              <div className="px-5 pt-2 pb-6 space-y-4">
+
+                {/* Contact message */}
+                <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3.5 space-y-3">
+                  <p className="text-sm text-gray-700 leading-relaxed">
+                    Захиалга өгсөнд баярлалаа. Танд асуух зүйл эсвэл захиалгаа илгээж, доорх дансаар төлбөрөө төлсөн бол утсаар холбогдоорой.
+                  </p>
+                  <a
+                    href="tel:99883366"
+                    className="flex items-center justify-center gap-2 w-full bg-green-500 hover:bg-green-600 active:bg-green-700 text-white text-sm font-semibold py-3 rounded-xl transition-colors shadow-sm"
+                  >
+                    <Phone className="w-4 h-4" />
+                    Залгах 99883366
+                  </a>
+                </div>
+
+                {/* Bank details — always shown */}
+                <PaymentInfoCard
+                  bankName={BANK_NAME}
+                  accountHolder="Modern UI LLC"
+                  accountNumber={BANK_ACCOUNT}
+                  transferNote={phone || undefined}
+                  showTransferWarning={!phone}
+                />
+
+                {/* Order summary */}
+                <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-2.5">
+                  <p className="text-xs font-semibold text-gray-700">Захиалгын дүн</p>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-sm text-gray-500">
+                      <span>Бараа</span>
+                      <span>₮{grandTotal.toLocaleString()}</span>
+                    </div>
+                    {deliveryType === 'delivery' && (
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="text-gray-500">Хүргэлтийн хөлс</span>
+                        {isFreeDelivery ? (
+                          <span className="inline-flex items-center gap-1 text-green-600 font-semibold">
+                            <Gift className="w-3.5 h-3.5" /> Үнэгүй
+                          </span>
+                        ) : location && nearestBranchResult && store ? (
+                          <span className="text-gray-900 font-semibold">₮{deliveryFee.toLocaleString()}</span>
+                        ) : (
+                          <span className="text-gray-400 text-xs italic">байршил хүлээж байна</span>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+                      <span className="text-sm font-semibold text-gray-700">Нийт</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xl font-bold text-gray-900">₮{finalTotal.toLocaleString()}</span>
+                        <button
+                          type="button"
+                          onClick={handleCopyTotal}
+                          title="Нийт дүн хуулах"
+                          aria-label="Нийт дүн хуулах"
+                          className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg
+                                     bg-transparent hover:bg-gray-200 active:bg-gray-300
+                                     text-gray-400 hover:text-gray-700 transition-colors"
+                        >
+                          {copiedTotal
+                            ? <Check className="w-3.5 h-3.5 text-green-500" />
+                            : <Copy  className="w-3.5 h-3.5" />
+                          }
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ── Sticky footer — step-specific buttons (hidden when submitted) ──── */}
+        {!submitted && (
+          <div className="shrink-0 border-t border-gray-100 px-5 pt-3 pb-6 bg-white">
+            {step === 1 && (
+              <button
+                onClick={handleStep1Next}
+                className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800
+                           text-white text-sm font-semibold py-3.5 rounded-xl
+                           transition-colors shadow-sm"
+              >
+                Хүргэлт сонгох
+              </button>
+            )}
+
+            {step === 2 && (
+              <div className="flex gap-3">
+                <button
+                  onClick={() => goToStep(1)}
+                  className="flex-1 bg-gray-100 hover:bg-gray-200 active:bg-gray-300
+                             text-gray-700 text-sm font-semibold py-3.5 rounded-xl
+                             transition-colors"
+                >
+                  Буцах
+                </button>
+                <button
+                  onClick={handleStep2Next}
+                  className="flex-[2] bg-blue-600 hover:bg-blue-700 active:bg-blue-800
+                             text-white text-sm font-semibold py-3.5 rounded-xl
+                             transition-colors shadow-sm"
+                >
+                  Төлбөр төлөх
+                </button>
+              </div>
+            )}
+
+            {step === 3 && (
+              <div className="flex flex-col gap-2.5">
+                {/* Terms text button — left-aligned, above action buttons */}
+                <button
+                  type="button"
+                  className="self-start bg-transparent border-0 p-0 text-blue-600
+                             cursor-pointer hover:underline"
+                  style={{ fontSize: 13 }}
+                >
+                  Үйлчилгээний журам
+                </button>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => goToStep(2)}
+                    className="flex-1 bg-gray-100 hover:bg-gray-200 active:bg-gray-300
+                               text-gray-700 text-sm font-semibold py-3.5 rounded-xl
+                               transition-colors"
+                  >
+                    Буцах
+                  </button>
+                  <button
+                    onClick={handleSubmit}
+                    className="flex-[2] bg-blue-600 hover:bg-blue-700 active:bg-blue-800
+                               text-white text-sm font-semibold py-3.5 rounded-xl
+                               transition-colors shadow-sm"
+                  >
+                    Захиалга илгээх
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Map picker — z-[160] floats above checkout z-[140] */}
+      <MapPickerModal
+        isOpen={isMapOpen}
+        onClose={() => setIsMapOpen(false)}
+        onConfirm={(picked: PickedLocation) => {
+          setLocation({ lat: picked.lat, lng: picked.lng, address: picked.address });
+          setLocationError('');
+        }}
+        initialLat={location?.lat ?? null}
+        initialLng={location?.lng ?? null}
+      />
+    </div>
+  );
+}
+
+// ─── Wizard progress indicator ────────────────────────────────────────────────
+function WizardProgress({ currentStep }: { currentStep: WizardStep }) {
+  const steps: { id: WizardStep; label: string }[] = [
+    { id: 1, label: 'Хүлээн авах' },
+    { id: 2, label: 'Хүргэлт' },
+    { id: 3, label: 'Төлбөр' },
+  ];
+
+  return (
+    <div className="flex items-center">
+      {steps.map(({ id, label }, idx) => {
+        const isCompleted = currentStep > id;
+        const isActive    = currentStep === id;
+
+        return (
+          <div key={id} className="flex items-center flex-1 last:flex-none">
+            {/* Circle + label */}
+            <div className="flex flex-col items-center gap-1 min-w-0">
+              <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0 transition-all duration-200 ${
+                isCompleted
+                  ? 'bg-blue-600 text-white'
+                  : isActive
+                  ? 'bg-blue-600 text-white ring-4 ring-blue-100'
+                  : 'bg-gray-100 text-gray-400'
+              }`}>
+                {isCompleted
+                  ? <CheckCircle2 className="w-4 h-4" />
+                  : id}
+              </div>
+              <span className={`text-[10px] font-medium leading-tight text-center transition-colors duration-200 ${
+                isActive    ? 'text-blue-700' :
+                isCompleted ? 'text-blue-500' : 'text-gray-400'
+              }`}>
+                {label}
+              </span>
+            </div>
+
+            {/* Connector line (not after last step) */}
+            {idx < steps.length - 1 && (
+              <div className="flex-1 h-px mx-1.5 mb-4 transition-colors duration-200"
+                style={{ backgroundColor: currentStep > id ? '#2563eb' : '#e5e7eb' }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Free delivery progress bar ���──────────────────────────────────────────────
+function FreeDeliveryProgress({
+  cartTotal, threshold, isFree,
+}: {
+  cartTotal: number;
+  threshold: number;
+  isFree:    boolean;
+}) {
+  const progressPercent = Math.min((cartTotal / threshold) * 100, 100);
+  const remaining       = Math.max(threshold - cartTotal, 0);
+
+  if (isFree) {
+    return (
+      <div className="flex items-center gap-2.5 bg-green-50 border border-green-200 rounded-xl px-3.5 py-3">
+        <span className="text-base leading-none select-none">🎉</span>
+        <p className="text-xs font-semibold text-green-700">Та үнэгүй хүргэлт авлаа!</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-3 space-y-2">
+      <p className="text-xs font-medium text-blue-700">
+        Үнэгүй хүргэлт авахад{' '}
+        <span className="font-bold">{remaining.toLocaleString()}₮</span>{' '}
+        дутуу байна
+      </p>
+      <div className="h-1.5 bg-blue-100 rounded-full overflow-hidden">
+        <div
+          className="h-full rounded-full bg-blue-600 transition-all duration-500 ease-out"
+          style={{ width: `${progressPercent}%` }}
+        />
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] text-blue-400">₮{cartTotal.toLocaleString()}</span>
+        <span className="text-[10px] text-blue-400">₮{threshold.toLocaleString()}</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Delivery fee breakdown card ──────────────────────────────────────────────
+interface DeliveryFeeCardProps {
+  location:            GeoLocation | null;
+  isLoading:           boolean;
+  dataError:           string;
+  nearestBranchResult: NearestBranchResult | null;
+  store:               StoreConfig | null;
+  deliveryFee:         number;
+  isFreeDelivery:      boolean;
+  onRetry:             () => void;
+}
+
+function DeliveryFeeCard({
+  location, isLoading, dataError,
+  nearestBranchResult, store, deliveryFee, isFreeDelivery, onRetry,
+}: DeliveryFeeCardProps) {
+  if (!location) return null;
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2.5 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-3">
+        <Loader2 className="w-4 h-4 text-gray-400 animate-spin shrink-0" />
+        <p className="text-xs text-gray-400">Ойрхон салбар хайж байна…</p>
+      </div>
+    );
+  }
+
+  if (dataError) {
+    return (
+      <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+        <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+        <p className="flex-1 text-xs text-red-600">Салбарын мэдээлэл ачаалагдсангүй</p>
+        <button onClick={onRetry} className="text-[11px] font-semibold text-red-500 hover:text-red-700 flex items-center gap-1">
+          <RefreshCw className="w-3 h-3" /> Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!nearestBranchResult || !store) {
+    return (
+      <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2.5">
+        <Store className="w-4 h-4 text-gray-300 shrink-0" />
+        <p className="text-xs text-gray-400">Салбарын мэдээлэл олдсонгүй</p>
+      </div>
+    );
+  }
+
+  const { branch, displayKm } = nearestBranchResult;
+
+  if (isFreeDelivery) {
+    return (
+      <div className="bg-green-50 border border-green-200 rounded-xl px-3.5 py-3 space-y-1.5">
+        <div className="flex items-center gap-1.5">
+          <Gift className="w-3.5 h-3.5 text-green-500 shrink-0" />
+          <p className="text-xs font-semibold text-green-700">Үнэгүй хүргэлт — салбар #{branch.id}</p>
+        </div>
+        <div className="flex justify-between text-xs text-green-600">
+          <span className="flex items-center gap-1"><Route className="w-3 h-3" /> {displayKm} км</span>
+          <span className="font-bold">₮0 — Үнэгүй</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-3 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <Store className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+        <p className="text-xs font-semibold text-blue-700">Тооцоо — ойрхон салбар #{branch.id}</p>
+      </div>
+      <div className="space-y-1.5">
+        <div className="flex justify-between">
+          <span className="flex items-center gap-1 text-xs text-blue-600"><Route className="w-3 h-3" /> Зай</span>
+          <span className="text-xs font-semibold text-blue-700">{displayKm} км</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="flex items-center gap-1 text-xs text-blue-600"><Truck className="w-3 h-3" /> 1 км үнэ</span>
+          <span className="text-xs font-semibold text-blue-700">₮{store.base_price_per_km.toLocaleString()}</span>
+        </div>
+        {store.min_delivery_fee > 0 && (
+          <div className="flex justify-between">
+            <span className="text-xs text-blue-600">Доод хэмжээ</span>
+            <span className="text-xs text-blue-600">₮{store.min_delivery_fee.toLocaleString()}</span>
+          </div>
+        )}
+      </div>
+      <div className="border-t border-blue-200 pt-1.5 flex justify-between items-center">
+        <span className="text-xs font-semibold text-blue-700">Тээврийн хөлс</span>
+        <span className="text-sm font-bold text-blue-900">₮{deliveryFee.toLocaleString()}</span>
+      </div>
+      <p className="text-[10px] text-blue-400 text-right">
+        {displayKm} км × ₮{store.base_price_per_km.toLocaleString()} → ₮{deliveryFee.toLocaleString()} (₮100 дугуйлсан)
+      </p>
+    </div>
+  );
+}

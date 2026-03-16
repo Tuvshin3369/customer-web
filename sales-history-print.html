@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="mn">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Зарлагын Баримт – SalesHistoryPrint</title>
+  <style>
+    /* ─────────────────────────────────────────────────────────────────
+       @page  — A5 portrait, margin: 0  (safe-zone is handled in JS)
+       body   — Calibri 25 px, margin 0                (per spec)
+       Layout — position:absolute in mm throughout
+                No flexbox / grid / % / auto on any print element.
+    ───────────────────────────────────────────────────────────────── */
+    @page { size: A5 portrait; margin: 0; }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Calibri', 'Segoe UI', 'Arial', sans-serif;
+      font-size:   25px;
+      margin:      0;
+      background:  #fff;
+      /* force background colours / images to print */
+      -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+    }
+
+    /* ── Screen-only: grey stage, page cards with shadow ── */
+    @media screen {
+      body {
+        background: #3f3f3f;
+        padding:    32px 0 56px;
+      }
+      .page {
+        margin:     0 auto 28px;
+        box-shadow: 0 8px 48px rgba(0,0,0,0.55);
+      }
+      /* Screen toolbar */
+      #toolbar {
+        position:   fixed;
+        top:        0; left: 0; right: 0;
+        height:     48px;
+        background: rgba(15,23,42,0.92);
+        backdrop-filter: blur(6px);
+        display:    flex;
+        align-items: center;
+        justify-content: space-between;
+        padding:    0 20px;
+        z-index:    9999;
+      }
+      #toolbar span { color: #94a3b8; font-size: 14px; }
+      #btn-print {
+        display:     flex;
+        align-items: center;
+        gap:         8px;
+        padding:     8px 20px;
+        background:  #2563eb;
+        color:       #fff;
+        border:      none;
+        border-radius: 8px;
+        font-size:   14px;
+        font-family: inherit;
+        cursor:      pointer;
+      }
+      #btn-print:hover  { background: #1d4ed8; }
+      #btn-print:active { background: #1e40af; }
+      /* push content below fixed toolbar */
+      #spacer { height: 48px; }
+    }
+
+    /* ── Print-only: clean pages ── */
+    @media print {
+      #toolbar, #spacer { display: none !important; }
+      .page             { page-break-after: always; }
+      .page:last-child  { page-break-after: avoid;  }
+    }
+
+    /* ── Page container — exact A5 ── */
+    .page {
+      width:    148mm;
+      height:   210mm;
+      position: relative;
+      overflow: hidden;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Screen toolbar (hidden when printing) -->
+<div id="toolbar">
+  <span id="toolbar-info">Зарлагын Баримт – урьдчилан харах</span>
+  <button id="btn-print" onclick="window.print()">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="6 9 6 2 18 2 18 9"/>
+      <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16
+               a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
+      <rect x="6" y="14" width="12" height="8"/>
+    </svg>
+    Хэвлэх (Ctrl+P)
+  </button>
+</div>
+<div id="spacer"></div>
+
+<!-- Rendered pages go here -->
+<div id="print-container"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════════════════
+   SalesHistoryPrint
+   ──────────────────
+   Generates a printable A5-portrait "Зарлагын Баримт" (Sales Receipt).
+
+   Rules (per spec):
+   • @page { size: A5 portrait; margin: 0 }
+   • body  { font-family: Calibri; font-size: 25px; margin: 0 }
+   • All document elements use position:absolute in millimetres.
+   • No flexbox / grid / percentages / auto layout on any print element.
+   • Safe zone: 5 mm from every page edge.
+   • Always renders exactly 20 table rows (empty rows pad missing products).
+   • If products exceed 15 rows, a second page is generated with the
+     header repeated and the remaining rows + footer (totals + signatures).
+
+   Usage:
+     SalesHistoryPrint(data)
+     SalesHistoryPrint(data, 'my-container-id')
+
+   data shape:
+     {
+       docNumber : string,          // "2025-038"
+       date      : string,          // "2025.02.26"
+       store     : string,          // "Store B"
+       phone     : string,          // "88883838"
+       cashier  ?: string,          // "Б.Нарантуяа"    (optional)
+       products  : Array<{
+         name     : string,
+         quantity : number,
+         price    : number,
+       }>,
+       note     ?: string,          // footer note      (optional)
+     }
+══════════════════════════════════════════════════════════════════════════════ */
+
+// ── Layout constants (all dimensions in mm) ──────────────────────────────────
+const L = Object.freeze({
+  // Page
+  pw:   148,    // page width
+  ph:   210,    // page height
+  safe:   5,    // safe-zone inset from each edge
+
+  // ── Header y-positions (origin = top edge of each page) ──────────────────
+  //
+  //   y:  8mm  Company name row
+  //   y: 15mm  "ЗАРЛАГЫН БАРИМТ №"   ← spec: x:45mm  y:15mm  35px bold
+  //   y: 27mm  Document number        ← directly below title
+  //   y: 34mm  ─── separator 1 ───
+  //   y: 37mm  Огноо / Дэлгүүр info row
+  //   y: 44mm  Утас  / Кассчин info row
+  //   y: 51mm  ─── separator 2 ───
+  //   y: 52mm  Table header row  (height 9 mm)
+  //   y: 61mm  Table body start
+  //
+  companyY :  8,
+  titleX   : 45,   // ← spec
+  titleY   : 15,   // ← spec
+  numY     : 27,
+  sep1Y    : 34,
+  f1Y      : 37,
+  f2Y      : 44,
+  sep2Y    : 51,
+  thY      : 52,   // table header top
+  thH      :  9,   // table header height
+  tbY      : 61,   // table body start  (= thY + thH)
+
+  // ── Table columns  [key, label, left-x, width, alignment] ────────────────
+  //
+  //  Column  │ left-x │ width │ right-x
+  //  ────────┼────────┼───────┼────────
+  //  №       │   5 mm │  9 mm │  14 mm
+  //  Бараа   │  14 mm │ 68 mm │  82 mm
+  //  Тоо     │  82 mm │ 13 mm │  95 mm
+  //  Нэгж үнэ│  95 mm │ 25 mm │ 120 mm
+  //  Нийт    │ 120 mm │ 23 mm │ 143 mm ← pw(148) – safe(5) ✓
+  //
+  cols: [
+    { key:'num',   label:'№',           x:   5, w:  9, align:'center' },
+    { key:'name',  label:'Барааны нэр',  x:  14, w: 68, align:'left'   },
+    { key:'qty',   label:'Тоо',          x:  82, w: 13, align:'center' },
+    { key:'price', label:'Нэгж үнэ',     x:  95, w: 25, align:'right'  },
+    { key:'total', label:'Нийт',         x: 120, w: 23, align:'right'  },
+  ],
+
+  rowH      :  9,   // data row height (mm)
+  rowsPage1 : 15,   // rows on first  page  (rows 1–15)
+  rowsTotal : 20,   // always render this many rows
+  //
+  //  Page 1 layout check:
+  //    header ends at tbY = 61mm
+  //    15 rows × 9mm   = 135mm → bottom at 196mm
+  //    safe bottom      = 205mm   (210 − 5)         ✓ (9 mm spare)
+  //
+  //  Page 2 layout check:
+  //    header ends at tbY = 61mm
+  //    5 rows × 9mm    =  45mm → bottom at 106mm
+  //    footer depth    ≈  40mm → bottom at ~146mm   ✓
+});
+
+// ── Utility helpers ──────────────────────────────────────────────────────────
+
+const mm = v => `${v}mm`;
+
+const fmtNum = n =>
+  (n === null || n === undefined || n === '') ? ''
+  : Number(n).toLocaleString('en-US');
+
+/** Create a DOM element, apply inline styles, set text content. */
+function el(tag, css, text) {
+  const node = document.createElement(tag);
+  if (css)  Object.assign(node.style, css);
+  if (text != null) node.textContent = String(text);
+  return node;
+}
+
+/**
+ * Absolutely positioned text cell.
+ * Text is vertically centred via CSS line-height trick.
+ * Default: overflow:hidden, white-space:nowrap (single line).
+ */
+function cell(x, y, w, h, content, css) {
+  return el('div', Object.assign({
+    position:   'absolute',
+    left:       mm(x),  top:        mm(y),
+    width:      mm(w),  height:     mm(h),
+    lineHeight: mm(h),
+    overflow:   'hidden',
+    whiteSpace: 'nowrap',
+  }, css || {}), content);
+}
+
+/** Horizontal rule. */
+function hLine(x, y, w, color, thick) {
+  return el('div', {
+    position:   'absolute',
+    left:       mm(x),
+    top:        mm(y),
+    width:      mm(w),
+    height:     mm(thick || 0.35),
+    background: color || '#334155',
+  });
+}
+
+/** Vertical rule. */
+function vLine(x, y, h, color, thick) {
+  return el('div', {
+    position:   'absolute',
+    left:       mm(x),
+    top:        mm(y),
+    width:      mm(thick || 0.3),
+    height:     mm(h),
+    background: color || '#94a3b8',
+  });
+}
+
+// ── Header block (identical on every page) ───────────────────────────────────
+function renderHeader(page, data, pageNum, totalPages) {
+  const { safe: s, pw, titleX, titleY, cols } = L;
+  const cw = pw - 2 * s;   // content width
+
+  /* ── Company name — top-left corner ─────────────────────────────── */
+  page.appendChild(cell(s, L.companyY, 90, 7,
+    'Компанийн нэр ХХК',
+    { fontSize:'18px', color:'#64748b' }));
+
+  /* ── Page indicator — top-right corner ──────────────────────────── */
+  page.appendChild(cell(pw - s - 43, L.companyY, 43, 7,
+    `Хуудас ${pageNum} / ${totalPages}`,
+    { fontSize:'17px', color:'#94a3b8', textAlign:'right' }));
+
+  /* ── Main title "ЗАРЛАГЫН БАРИМТ №"
+         Spec: x:45mm  y:15mm  font-size:35px  font-weight:bold        ── */
+  page.appendChild(cell(titleX, titleY, pw - titleX - s, 11,
+    'ЗАРЛАГЫН БАРИМТ №',
+    {
+      fontSize:      '35px',
+      fontWeight:    '700',
+      color:         '#0f172a',
+      letterSpacing: '-0.3px',
+      overflow:      'visible',   // title may visually extend past container
+    }));
+
+  /* ── Document number — line directly below the title ─────────────── */
+  page.appendChild(cell(titleX, L.numY, pw - titleX - s, 8,
+    data.docNumber || '—',
+    {
+      fontSize:           '27px',
+      fontWeight:         '700',
+      color:              '#1d4ed8',
+      letterSpacing:      '0.5px',
+      fontVariantNumeric: 'tabular-nums',
+    }));
+
+  /* ── Separator 1 ─────────────────────────────────────────────────── */
+  page.appendChild(hLine(s, L.sep1Y, cw, '#1e293b', 0.55));
+
+  /* ── Info row 1: Огноо (left) │ Дэлгүүр (right) ─────────────────── */
+  page.appendChild(cell(s,  L.f1Y, 14, 6, 'Огноо:',    { fontSize:'19px', color:'#64748b' }));
+  page.appendChild(cell(21, L.f1Y, 38, 6, data.date  || '—',
+    { fontSize:'20px', fontWeight:'600', color:'#0f172a', fontVariantNumeric:'tabular-nums' }));
+
+  page.appendChild(cell(64, L.f1Y, 20, 6, 'Дэлгүүр:', { fontSize:'19px', color:'#64748b' }));
+  page.appendChild(cell(86, L.f1Y, 57, 6, data.store || '—',
+    { fontSize:'20px', fontWeight:'600', color:'#0f172a' }));
+
+  /* ── Info row 2: Утас (left) │ Кассчин (right) ───────────────────── */
+  page.appendChild(cell(s,  L.f2Y, 14, 6, 'Утас:',    { fontSize:'19px', color:'#64748b' }));
+  page.appendChild(cell(21, L.f2Y, 38, 6, data.phone || '—',
+    {
+      fontSize:   '20px',
+      fontWeight: '600',
+      color:      '#0f172a',
+      fontFamily: "'Consolas','Courier New',monospace",
+    }));
+
+  page.appendChild(cell(64, L.f2Y, 22, 6, 'Кассчин:', { fontSize:'19px', color:'#64748b' }));
+  page.appendChild(cell(88, L.f2Y, 55, 6, data.cashier || '—',
+    { fontSize:'20px', fontWeight:'600', color:'#0f172a' }));
+
+  /* ── Separator 2 ─────────────────────────────────────────────────── */
+  page.appendChild(hLine(s, L.sep2Y, cw, '#1e293b', 0.55));
+
+  /* ── Table column header row ─────────────────────────────────────── */
+  /* Background fill */
+  page.appendChild(el('div', {
+    position:   'absolute',
+    left:       mm(s),     top:    mm(L.thY),
+    width:      mm(cw),    height: mm(L.thH),
+    background: '#1e293b',
+  }));
+
+  /* Column labels + inner vertical dividers */
+  cols.forEach((col, ci) => {
+    const lp = col.align === 'left'  ? 1.5 : 0;
+    const rp = col.align === 'right' ? 1.5 : 0;
+
+    page.appendChild(cell(col.x + lp, L.thY, col.w - lp - rp, L.thH, col.label, {
+      fontSize:   '18px',
+      fontWeight: '700',
+      color:      '#f1f5f9',
+      textAlign:  col.align,
+    }));
+
+    /* Divider between columns (skip before first column) */
+    if (ci > 0) {
+      page.appendChild(el('div', {
+        position:   'absolute',
+        left:       mm(col.x - 0.15),
+        top:        mm(L.thY),
+        width:      '0.3mm',
+        height:     mm(L.thH),
+        background: 'rgba(255,255,255,0.2)',
+      }));
+    }
+  });
+}
+
+// ── Table body rows ──────────────────────────────────────────────────────────
+function renderRows(page, rows, startY) {
+  const { safe: s, pw, rowH, cols, thY } = L;
+  const tableW  = pw - 2 * s;
+  const totalH  = rows.length * rowH;
+  const borderH = (startY + totalH) - thY;   // spans header + body rows
+
+  /* ── Row backgrounds + cell values ──────────────────────────────── */
+  rows.forEach((row, ri) => {
+    const rowY = startY + ri * rowH;
+    const isEmpty = !row || !row.name;
+
+    /* Row background (alternating; empty rows use a lighter tint) */
+    page.appendChild(el('div', {
+      position:   'absolute',
+      left:       mm(s),
+      top:        mm(rowY),
+      width:      mm(tableW),
+      height:     mm(rowH),
+      background: isEmpty ? '#f9fafb' : (ri % 2 === 0 ? '#ffffff' : '#f0f4f9'),
+    }));
+
+    /* Cell content (skip entirely for empty rows) */
+    if (!isEmpty) {
+      const rowTotal = (row.quantity || 0) * (row.price || 0);
+      const vals = {
+        num:   row._num || '',
+        name:  row.name,
+        qty:   row.quantity != null ? String(row.quantity) : '',
+        price: row.price  ? fmtNum(row.price)  : '',
+        total: rowTotal   ? fmtNum(rowTotal)   : '',
+      };
+
+      cols.forEach(col => {
+        const v = vals[col.key];
+        if (!v && v !== 0) return;
+        const lp = col.align === 'left'  ? 1.5 : 0;
+        const rp = col.align === 'right' ? 1.5 : 0;
+
+        page.appendChild(cell(col.x + lp, rowY, col.w - lp - rp, rowH, v, {
+          fontSize:           '21px',
+          color:              col.key === 'num' ? '#64748b' : '#0f172a',
+          textAlign:          col.align,
+          fontVariantNumeric: 'tabular-nums',
+        }));
+      });
+    }
+
+    /* Row bottom divider */
+    page.appendChild(hLine(s, rowY + rowH, tableW, '#dce3eb', 0.25));
+  });
+
+  /* ── Outer border (encloses table header + body) ─────────────────── */
+  page.appendChild(hLine(s, thY, tableW, '#334155', 0.5));                    // top
+  page.appendChild(hLine(s, startY + totalH, tableW, '#334155', 0.5));        // bottom
+  page.appendChild(vLine(s, thY, borderH, '#334155', 0.45));                  // left
+  page.appendChild(vLine(pw - s - 0.45, thY, borderH, '#334155', 0.45));      // right
+
+  /* ── Inner vertical column separators ───────────────────────────── */
+  cols.forEach((col, ci) => {
+    if (ci === 0) return;
+    page.appendChild(vLine(col.x, startY, totalH, '#b8c4d0', 0.25));
+  });
+}
+
+// ── Footer (only on the last page) ──────────────────────────────────────────
+function renderFooter(page, data, lastRowBottom) {
+  const { safe: s, pw } = L;
+  const y = lastRowBottom + 4;   // 4 mm gap below last row
+
+  /* ── Grand total ─────────────────────────────────────────────────── */
+  const grandTotal = (data.products || []).reduce(
+    (sum, p) => sum + (p.quantity || 0) * (p.price || 0), 0);
+
+  /* Thick rule above total */
+  page.appendChild(hLine(s, y, pw - 2 * s, '#1e293b', 0.7));
+
+  /* "Нийт дүн:" label — right-aligned, spanning first four columns */
+  page.appendChild(cell(s, y + 2, 112, 9, 'Нийт дүн:', {
+    fontSize:   '22px',
+    fontWeight: '700',
+    color:      '#0f172a',
+    textAlign:  'right',
+  }));
+
+  /* Total amount value — aligned with Нийт column */
+  page.appendChild(cell(120, y + 2, 21, 9, fmtNum(grandTotal) + '₮', {
+    fontSize:           '23px',
+    fontWeight:         '700',
+    color:              '#0f172a',
+    textAlign:          'right',
+    fontVariantNumeric: 'tabular-nums',
+  }));
+
+  /* ── Note ────────────────────────────────────────────────────────── */
+  let nextY = y + 13;
+  if (data.note && data.note.trim()) {
+    page.appendChild(cell(s, nextY, pw - 2 * s, 7,
+      'Тэмдэглэл: ' + data.note,
+      { fontSize:'18px', color:'#475569' }));
+    nextY += 11;
+  }
+
+  /* ── Signature lines ─────────────────────────────────────────────── */
+  const sigY = nextY + 5;
+
+  /* Left: Борлуулагч */
+  page.appendChild(cell(s, sigY, 50, 6,
+    'Борлуулагч:', { fontSize:'19px', color:'#475569' }));
+  page.appendChild(hLine(s, sigY + 9, 60, '#9ca3af', 0.35));
+
+  /* Right: Хүлээн авагч */
+  page.appendChild(cell(84, sigY, 59, 6,
+    'Хүлээн авагч:', { fontSize:'19px', color:'#475569' }));
+  page.appendChild(hLine(100, sigY + 9, 43, '#9ca3af', 0.35));
+}
+
+// ── Page DOM factory ─────────────────────────────────────────────────────────
+function makePage() {
+  const p = document.createElement('div');
+  p.className = 'page';
+  return p;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SalesHistoryPrint — main exported function
+// ═══════════════════════════════════════════════════════════════════════════════
+function SalesHistoryPrint(data, containerId) {
+  const container = document.getElementById(containerId || 'print-container');
+  if (!container) {
+    console.error('[SalesHistoryPrint] container not found:', containerId || 'print-container');
+    return;
+  }
+  container.innerHTML = '';
+
+  /* Pad products to exactly rowsTotal; tag each non-empty row with _num. */
+  let seq = 0;
+  const padded = Array.from({ length: L.rowsTotal }, (_, i) => {
+    const p = (data.products || [])[i];
+    return p ? { ...p, _num: ++seq } : null;
+  });
+
+  const rp1        = L.rowsPage1;            // rows on page 1
+  const rp2        = L.rowsTotal - rp1;      // rows on page 2
+  const page1Rows  = padded.slice(0, rp1);
+  const page2Rows  = padded.slice(rp1);
+  const totalPages = rp2 > 0 ? 2 : 1;
+
+  /* Update toolbar info */
+  const info = document.getElementById('toolbar-info');
+  if (info) info.textContent =
+    `Зарлагын Баримт №${data.docNumber || '—'}` +
+    ` · ${totalPages} хуудас · ${(data.products || []).length} бараа`;
+
+  /* ── PAGE 1 ── */
+  const p1 = makePage();
+  renderHeader(p1, data, 1, totalPages);
+  renderRows(p1, page1Rows, L.tbY);
+  if (totalPages === 1) renderFooter(p1, data, L.tbY + page1Rows.length * L.rowH);
+  container.appendChild(p1);
+
+  /* ── PAGE 2 (if products > 15 or always for 20 rows) ── */
+  if (totalPages > 1) {
+    const p2 = makePage();
+    renderHeader(p2, data, 2, totalPages);
+    renderRows(p2, page2Rows, L.tbY);
+    renderFooter(p2, data, L.tbY + page2Rows.length * L.rowH);
+    container.appendChild(p2);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  Demo data
+//  Remove or replace in production.
+//  17 products → page 1 (rows 1-15) + page 2 (rows 16-17 + 3 empty + footer)
+// ═══════════════════════════════════════════════════════════════════════════════
+const DEMO_DATA = {
+  docNumber : '2025-038',
+  date      : '2025.02.26',
+  store     : 'Store B',
+  phone     : '88883838',
+  cashier   : 'Б.Нарантуяа',
+  products  : [
+    { name: 'Nike Air Max 270',        quantity: 3, price: 289000 },
+    { name: 'Nike Air Force 1',        quantity: 2, price: 245000 },
+    { name: 'Nike Dri-FIT T-Shirt',    quantity: 4, price:  65000 },
+    { name: 'Sports Socks 5-Pack',     quantity: 6, price:  25000 },
+    { name: 'Cap',                     quantity: 3, price:  55000 },
+    { name: 'Adidas Ultraboost 22',    quantity: 2, price: 320000 },
+    { name: 'Adidas Stan Smith',       quantity: 1, price: 195000 },
+    { name: 'JBL Flip 6',             quantity: 2, price: 180000 },
+    { name: 'Sony WH-1000XM5',        quantity: 1, price: 450000 },
+    { name: 'Running Shoes Pro X2',   quantity: 4, price: 195000 },
+    { name: 'Premium Cotton T-Shirt', quantity: 3, price:  45000 },
+    { name: 'Sports Gym Bag',         quantity: 2, price:  89000 },
+    { name: 'JBL Charge 5',          quantity: 1, price: 250000 },
+    { name: 'Fitness Gloves',         quantity: 2, price:  45000 },
+    { name: 'Compression Socks',      quantity: 5, price:  18000 },
+    { name: 'Water Bottle 1L',        quantity: 3, price:  35000 },
+    { name: 'AUX Cable 3m',          quantity: 4, price:  15000 },
+  ],
+  note: 'Барааг цагтаа хүргэсэн.',
+};
+
+document.addEventListener('DOMContentLoaded', () => SalesHistoryPrint(DEMO_DATA));
+</script>
+</body>
+</html>
