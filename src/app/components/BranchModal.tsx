@@ -17,10 +17,30 @@ interface BranchModalProps {
   storeId: string | null;
 }
 
-function telHref(phone: string | null | undefined): string {
-  if (!phone?.trim()) return '#';
-  const d = phone.replace(/\D/g, '');
-  return d ? `tel:${d}` : '#';
+/**
+ * branches.phone_1: text эсвэл (хуучин int8) JSON number/string — аль алийг цифр мөр болгоно.
+ */
+function normalizePhoneDigits(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === 'bigint') {
+    const s = raw.toString();
+    return /^\d+$/.test(s) ? s : null;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    if (!Number.isInteger(raw) || raw < 0) return null;
+    const s = String(Math.trunc(raw));
+    return s.length > 0 && /^\d+$/.test(s) ? s : null;
+  }
+  if (typeof raw === 'string') {
+    const d = raw.trim().replace(/\D/g, '');
+    return d.length > 0 ? d : null;
+  }
+  return null;
+}
+
+function telHref(digits: string | null): string {
+  if (!digits) return '#';
+  return `tel:${digits}`;
 }
 
 function mapsUrl(lat: number | null, lng: number | null): string | null {
@@ -87,7 +107,7 @@ export function BranchModal({ isOpen, onClose, storeName, storeId }: BranchModal
         return {
           id: row.id != null ? String(row.id) : '',
           address: typeof row.address === 'string' ? row.address : String(row.address ?? ''),
-          phone_1: typeof row.phone_1 === 'string' && row.phone_1.trim() ? row.phone_1.trim() : null,
+          phone_1: normalizePhoneDigits(row.phone_1),
           address_lat: latRaw != null && latRaw !== '' ? Number(latRaw) : null,
           address_lng: lngRaw != null && lngRaw !== '' ? Number(lngRaw) : null,
         };
