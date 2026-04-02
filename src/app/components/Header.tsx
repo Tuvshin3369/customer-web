@@ -4,12 +4,20 @@ import {
   User, Package, Clock, LogOut, Search, X, ClipboardList, HardHat, FileText,
 } from 'lucide-react';
 
+export interface StorePickerItem {
+  id:   string;
+  name: string;
+}
+
 interface HeaderProps {
   brandName:             string;
   onContactClick:        () => void;
-  /** Hamburger: дэлгүүрийн нэрсийн жагсаалт (stores.name, үсгийн дараалалтай) */
-  storeNames:            string[];
-  onStoreSelect:         (name: string) => void;
+  /** Hamburger: дэлгүүрүүд (үсгийн дарааллаар) */
+  storePickerItems:      StorePickerItem[];
+  selectedStoreId:       string | null;
+  onStoreSelect:         (id: string) => void;
+  /** Сонгосон дэлгүүрийн stores.facebook_messenger_url */
+  messengerUrl:          string | null;
   onHomeClick?:          () => void;
   onCarClick?:           () => void;
   onCartClick?:          () => void;
@@ -116,8 +124,10 @@ function Tooltip({ label, children }: { label: string; children: React.ReactNode
 export function Header({
   brandName,
   onContactClick,
-  storeNames,
+  storePickerItems,
+  selectedStoreId,
   onStoreSelect,
+  messengerUrl,
   onHomeClick,
   onCarClick,
   onCartClick,
@@ -146,8 +156,8 @@ export function Header({
     setIsStorePickerOpen(false);
   }
 
-  function handlePickStore(name: string) {
-    onStoreSelect(name);
+  function handlePickStore(id: string) {
+    onStoreSelect(id);
     closeStorePicker();
   }
 
@@ -239,17 +249,28 @@ export function Header({
             >
               <Phone className="w-5 h-5 text-gray-700" />
             </button>
-            <a
-              href="https://m.me/YOUR_PAGE_USERNAME"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Messenger-ээр холбогдох"
-              className="p-2 hover:bg-gray-100 rounded-full transition-all
-                         active:scale-90 cursor-pointer"
-            >
-              {/* unique gradId avoids SVG def collision with desktop instance */}
-              <MessengerIcon size={20} gradId="msgGradMobile" />
-            </a>
+            {messengerUrl ? (
+              <a
+                href={messengerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Messenger-ээр холбогдох"
+                title="Messenger-ээр холбогдох"
+                onClick={() => onHomeClick?.()}
+                className="p-2 hover:bg-gray-100 rounded-full transition-all
+                           active:scale-90 cursor-pointer"
+              >
+                <MessengerIcon size={20} gradId="msgGradMobile" />
+              </a>
+            ) : (
+              <span
+                className="p-2 rounded-full text-gray-300 cursor-not-allowed"
+                aria-label="Messenger хаяг байхгүй"
+                title="Messenger хаяг байхгүй"
+              >
+                <MessengerIcon size={20} gradId="msgGradMobile" className="opacity-40" />
+              </span>
+            )}
           </div>
         </div>
 
@@ -299,18 +320,29 @@ export function Header({
                 </button>
               </Tooltip>
 
-              <Tooltip label="Messenger-ээр холбогдох">
-                <a
-                  href="https://m.me/YOUR_PAGE_USERNAME"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="Messenger-ээр холбогдох"
-                  className="flex items-center justify-center rounded-full transition-all
-                             hover:opacity-80 active:scale-90 cursor-pointer"
-                  style={{ width: 32, height: 32 }}
-                >
-                  <MessengerIcon size={22} gradId="msgGradDesktop" />
-                </a>
+              <Tooltip label={messengerUrl ? 'Messenger-ээр холбогдох' : 'Messenger хаяг байхгүй'}>
+                {messengerUrl ? (
+                  <a
+                    href={messengerUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label="Messenger-ээр холбогдох"
+                    onClick={() => onHomeClick?.()}
+                    className="flex items-center justify-center rounded-full transition-all
+                               hover:opacity-80 active:scale-90 cursor-pointer"
+                    style={{ width: 32, height: 32 }}
+                  >
+                    <MessengerIcon size={22} gradId="msgGradDesktop" />
+                  </a>
+                ) : (
+                  <span
+                    className="flex items-center justify-center rounded-full opacity-40 cursor-not-allowed"
+                    style={{ width: 32, height: 32 }}
+                    aria-label="Messenger хаяг байхгүй"
+                  >
+                    <MessengerIcon size={22} gradId="msgGradDesktop" />
+                  </span>
+                )}
               </Tooltip>
 
             </div>
@@ -523,13 +555,13 @@ export function Header({
               </button>
             </div>
             <nav className="flex-1 overflow-y-auto py-2" aria-label="Дэлгүүрийн жагсаалт">
-              {storeNames.map((name) => (
+              {storePickerItems.map(({ id, name }) => (
                 <button
-                  key={name}
+                  key={id}
                   type="button"
-                  onClick={() => handlePickStore(name)}
+                  onClick={() => handlePickStore(id)}
                   className={`w-full text-left px-4 py-3 text-sm transition-colors border-b border-gray-50
-                    ${name === brandName ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-800 hover:bg-gray-50'}`}
+                    ${id === selectedStoreId ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-800 hover:bg-gray-50'}`}
                 >
                   {name}
                 </button>

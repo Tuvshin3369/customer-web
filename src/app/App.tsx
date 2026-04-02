@@ -42,6 +42,14 @@ const BRAND_TO_STORE: Record<string, string> = {
   'PREMIUM LAB':  'Store B',
 };
 
+const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
+
+interface StoreFromApi {
+  id: string;
+  name: string;
+  facebook_messenger_url: string | null;
+}
+
 export default function App() {
   // ── Filters ──────────────────────────────────────────────────────────────
   const [selectedBrand,    setSelectedBrand]    = useState('MODERN UI');
@@ -73,9 +81,9 @@ export default function App() {
   // ── Cart state — declared here so the effects below can reference it ──────
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
 
-  // ── Дэлгүүрүүд (stores.name) — hamburger жагсаалт ─────────────────────────
-  const [storeNames, setStoreNames] = useState<string[]>([]);
-  const [selectedStoreName, setSelectedStoreName] = useState('');
+  // ── Дэлгүүрүүд (stores) — hamburger + Messenger URL ───────────────────────
+  const [stores, setStores] = useState<StoreFromApi[]>([]);
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
 
   async function parseJsonSafely(res: Response) {
     const raw = await res.text();
@@ -87,16 +95,17 @@ export default function App() {
     }
   }
 
-  async function fetchStoreNames() {
+  async function fetchStores() {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
     if (!supabaseUrl || !supabaseAnonKey) {
-      setStoreNames([]);
+      setStores([]);
+      setSelectedStoreId(null);
       return;
     }
     try {
       const query = new URLSearchParams({
-        select: 'name',
+        select: 'id,name,facebook_messenger_url',
         order: 'name.asc',
       });
       const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/stores?${query.toString()}`, {
@@ -111,27 +120,59 @@ export default function App() {
         throw new Error((json as { message?: string } | null)?.message || `HTTP ${res.status}`);
       }
       if (!Array.isArray(json)) {
-        setStoreNames([]);
+        setStores([]);
+        setSelectedStoreId(null);
         return;
       }
-      const names = json
-        .map((row: { name?: string }) => row.name)
-        .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
-        .sort((a, b) => a.localeCompare(b, 'mn'));
-      setStoreNames(names);
-      setSelectedStoreName((prev) => {
-        if (prev && names.includes(prev)) return prev;
-        return names[0] ?? '';
-      });
+      const mapped: StoreFromApi[] = json
+        .map((row: Record<string, unknown>) => {
+          const urlRaw = row.facebook_messenger_url;
+          const urlStr = typeof urlRaw === 'string' && urlRaw.trim() ? urlRaw.trim() : null;
+          return {
+            id: row.id != null ? String(row.id) : '',
+            name: typeof row.name === 'string' ? row.name.trim() : '',
+            facebook_messenger_url: urlStr,
+          };
+        })
+        .filter((r) => r.id.length > 0 && r.name.length > 0)
+        .sort((a, b) => a.name.localeCompare(b.name, 'mn'));
+      setStores(mapped);
+
+      let savedId: string | null = null;
+      try {
+        savedId = window.localStorage.getItem(SELECTED_STORE_STORAGE_KEY);
+      } catch {
+        /* private mode */
+      }
+      const nextId =
+        savedId && mapped.some((s) => s.id === savedId) ? savedId : (mapped[0]?.id ?? null);
+      setSelectedStoreId(nextId);
+      if (nextId) {
+        try {
+          window.localStorage.setItem(SELECTED_STORE_STORAGE_KEY, nextId);
+        } catch {
+          /* ignore */
+        }
+      }
     } catch (err) {
-      console.error('fetchStoreNames error:', err);
-      setStoreNames([]);
+      console.error('fetchStores error:', err);
+      setStores([]);
+      setSelectedStoreId(null);
     }
   }
 
   useEffect(() => {
-    fetchStoreNames();
+    fetchStores();
   }, []);
+
+  function handleStoreSelect(id: string) {
+    setSelectedStoreId(id);
+    try {
+      window.localStorage.setItem(SELECTED_STORE_STORAGE_KEY, id);
+    } catch {
+      /* ignore */
+    }
+  }
 
   function fireLockedToast() {
     setShowLockedToast(true);
@@ -290,10 +331,25 @@ export default function App() {
     return currentProducts.filter(p => p.name.toLowerCase().includes(q));
   }, [currentProducts, searchQuery]);
 
+  const storePickerItems = useMemo(
+    () => [...stores].sort((a, b) => a.name.localeCompare(b.name, 'mn')).map(({ id, name }) => ({ id, name })),
+    [stores],
+  );
+
+  const selectedStore = useMemo(
+    () => stores.find((s) => s.id === selectedStoreId) ?? null,
+    [stores, selectedStoreId],
+  );
+
+  const messengerUrl = useMemo(() => {
+    const u = selectedStore?.facebook_messenger_url?.trim();
+    return u && u.length > 0 ? u : null;
+  }, [selectedStore]);
+
   // ── Header title — сонгосон дэлгүүр (stores.name), эсвэл брэндийн store mapping ──
   const headerTitle = useMemo(
-    () => selectedStoreName || (BRAND_TO_STORE[selectedBrand] ?? selectedBrand),
-    [selectedStoreName, selectedBrand],
+    () => selectedStore?.name || (BRAND_TO_STORE[selectedBrand] ?? selectedBrand),
+    [selectedStore, selectedBrand],
   );
 
   const handleBrandChange = (brand: string) => {
@@ -351,8 +407,10 @@ export default function App() {
       <Header
         brandName={headerTitle}
         onContactClick={() => setIsBranchModalOpen(true)}
-        storeNames={storeNames}
-        onStoreSelect={setSelectedStoreName}
+        storePickerItems={storePickerItems}
+        selectedStoreId={selectedStoreId}
+        onStoreSelect={handleStoreSelect}
+        messengerUrl={messengerUrl}
         onHomeClick={handleHomeClick}
         onCarClick={() => setIsCarModalOpen(true)}
         onJobsClick={() => setIsJobsOpen(true)}
