@@ -470,6 +470,7 @@ export default function App() {
         isOpen={isBranchModalOpen}
         onClose={() => setIsBranchModalOpen(false)}
         storeName={headerTitle}
+        storeId={selectedStoreId}
       />
       <LoginModal
         isOpen={isLoginModalOpen}
