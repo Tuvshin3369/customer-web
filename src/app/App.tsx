@@ -73,6 +73,66 @@ export default function App() {
   // ── Cart state — declared here so the effects below can reference it ──────
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
 
+  // ── Дэлгүүрүүд (stores.name) — hamburger жагсаалт ─────────────────────────
+  const [storeNames, setStoreNames] = useState<string[]>([]);
+  const [selectedStoreName, setSelectedStoreName] = useState('');
+
+  async function parseJsonSafely(res: Response) {
+    const raw = await res.text();
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(`HTTP ${res.status}`);
+    }
+  }
+
+  async function fetchStoreNames() {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!supabaseUrl || !supabaseAnonKey) {
+      setStoreNames([]);
+      return;
+    }
+    try {
+      const query = new URLSearchParams({
+        select: 'name',
+        order: 'name.asc',
+      });
+      const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/stores?${query.toString()}`, {
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          Accept: 'application/json',
+        },
+      });
+      const json = await parseJsonSafely(res);
+      if (!res.ok) {
+        throw new Error((json as { message?: string } | null)?.message || `HTTP ${res.status}`);
+      }
+      if (!Array.isArray(json)) {
+        setStoreNames([]);
+        return;
+      }
+      const names = json
+        .map((row: { name?: string }) => row.name)
+        .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+        .sort((a, b) => a.localeCompare(b, 'mn'));
+      setStoreNames(names);
+      setSelectedStoreName((prev) => {
+        if (prev && names.includes(prev)) return prev;
+        return names[0] ?? '';
+      });
+    } catch (err) {
+      console.error('fetchStoreNames error:', err);
+      setStoreNames([]);
+    }
+  }
+
+  useEffect(() => {
+    fetchStoreNames();
+  }, []);
+
   function fireLockedToast() {
     setShowLockedToast(true);
     setTimeout(() => setShowLockedToast(false), 2200);
@@ -230,11 +290,10 @@ export default function App() {
     return currentProducts.filter(p => p.name.toLowerCase().includes(q));
   }, [currentProducts, searchQuery]);
 
-  // ── Header title — shows store name, not brand name ───────────────────────
-  // Switching between brands within the same store keeps the title stable.
+  // ── Header title — сонгосон дэлгүүр (stores.name), эсвэл брэндийн store mapping ──
   const headerTitle = useMemo(
-    () => BRAND_TO_STORE[selectedBrand] ?? selectedBrand,
-    [selectedBrand],
+    () => selectedStoreName || (BRAND_TO_STORE[selectedBrand] ?? selectedBrand),
+    [selectedStoreName, selectedBrand],
   );
 
   const handleBrandChange = (brand: string) => {
@@ -292,10 +351,8 @@ export default function App() {
       <Header
         brandName={headerTitle}
         onContactClick={() => setIsBranchModalOpen(true)}
-        onHamburgerClick={() => {
-          if (isLoggedIn) setIsUserMenuOpen(true);
-          else setIsLoginModalOpen(true);
-        }}
+        storeNames={storeNames}
+        onStoreSelect={setSelectedStoreName}
         onHomeClick={handleHomeClick}
         onCarClick={() => setIsCarModalOpen(true)}
         onJobsClick={() => setIsJobsOpen(true)}

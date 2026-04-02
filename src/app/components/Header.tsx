@@ -7,8 +7,9 @@ import {
 interface HeaderProps {
   brandName:             string;
   onContactClick:        () => void;
-  /** Зүүн дээд hamburger — mobile болон desktop */
-  onHamburgerClick?:     () => void;
+  /** Hamburger: дэлгүүрийн нэрсийн жагсаалт (stores.name, үсгийн дараалалтай) */
+  storeNames:            string[];
+  onStoreSelect:         (name: string) => void;
   onHomeClick?:          () => void;
   onCarClick?:           () => void;
   onCartClick?:          () => void;
@@ -115,7 +116,8 @@ function Tooltip({ label, children }: { label: string; children: React.ReactNode
 export function Header({
   brandName,
   onContactClick,
-  onHamburgerClick,
+  storeNames,
+  onStoreSelect,
   onHomeClick,
   onCarClick,
   onCartClick,
@@ -133,7 +135,21 @@ export function Header({
   onSearchChange,
 }: HeaderProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isStorePickerOpen, setIsStorePickerOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  function openStorePicker() {
+    setIsStorePickerOpen(true);
+  }
+
+  function closeStorePicker() {
+    setIsStorePickerOpen(false);
+  }
+
+  function handlePickStore(name: string) {
+    onStoreSelect(name);
+    closeStorePicker();
+  }
 
   // ── Cross-fade when store name changes ────────────────────────────────────
   // Fade out (80ms) → swap text → fade in (150ms).
@@ -173,6 +189,20 @@ export function Header({
     return () => document.removeEventListener('keydown', handleKey);
   }, [isMenuOpen]);
 
+  useEffect(() => {
+    if (!isStorePickerOpen) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsStorePickerOpen(false);
+    };
+    document.addEventListener('keydown', handleKey);
+    return () => document.removeEventListener('keydown', handleKey);
+  }, [isStorePickerOpen]);
+
+  useEffect(() => {
+    document.body.style.overflow = isStorePickerOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [isStorePickerOpen]);
+
   return (
     <header className="sticky top-0 z-50 bg-white border-b border-gray-200">
       <div className="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8">
@@ -184,8 +214,9 @@ export function Header({
           <div className="flex-1 flex justify-start items-center min-w-0">
             <button
               type="button"
-              onClick={() => onHamburgerClick?.()}
-              aria-label="Цэс нээх"
+              onClick={openStorePicker}
+              aria-label="Дэлгүүр сонгох"
+              aria-expanded={isStorePickerOpen}
               className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors shrink-0"
             >
               <Menu className="w-6 h-6 text-gray-800" strokeWidth={2} />
@@ -235,8 +266,9 @@ export function Header({
 
             <button
               type="button"
-              onClick={() => onHamburgerClick?.()}
-              aria-label="Цэс нээх"
+              onClick={openStorePicker}
+              aria-label="Дэлгүүр сонгох"
+              aria-expanded={isStorePickerOpen}
               className="flex items-center justify-center rounded-full transition-colors shrink-0
                          text-gray-700 hover:bg-gray-100 hover:text-blue-600"
               style={{ width: 40, height: 40 }}
@@ -467,6 +499,45 @@ export function Header({
         {/* ── end tablet/desktop row ── */}
 
       </div>
+
+      {isStorePickerOpen && (
+        <div className="fixed inset-0 z-[125]">
+          <button
+            type="button"
+            aria-label="Хаах"
+            className="absolute inset-0 bg-black/45"
+            onClick={closeStorePicker}
+          />
+          <div
+            className="absolute left-0 top-0 bottom-0 w-full max-w-[min(100vw,280px)] bg-white shadow-xl flex flex-col border-r border-gray-200 z-10"
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+              <span className="text-sm font-semibold text-gray-900">Дэлгүүр</span>
+              <button
+                type="button"
+                onClick={closeStorePicker}
+                aria-label="Хаах"
+                className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors"
+              >
+                <X className="w-4 h-4 text-gray-600" />
+              </button>
+            </div>
+            <nav className="flex-1 overflow-y-auto py-2" aria-label="Дэлгүүрийн жагсаалт">
+              {storeNames.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => handlePickStore(name)}
+                  className={`w-full text-left px-4 py-3 text-sm transition-colors border-b border-gray-50
+                    ${name === brandName ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-800 hover:bg-gray-50'}`}
+                >
+                  {name}
+                </button>
+              ))}
+            </nav>
+          </div>
+        </div>
+      )}
     </header>
   );
 }
