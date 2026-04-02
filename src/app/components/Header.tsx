@@ -7,6 +7,8 @@ import {
 interface HeaderProps {
   brandName:             string;
   onContactClick:        () => void;
+  /** Зүүн дээд hamburger — mobile болон desktop */
+  onHamburgerClick?:     () => void;
   onHomeClick?:          () => void;
   onCarClick?:           () => void;
   onCartClick?:          () => void;
@@ -113,6 +115,7 @@ function Tooltip({ label, children }: { label: string; children: React.ReactNode
 export function Header({
   brandName,
   onContactClick,
+  onHamburgerClick,
   onHomeClick,
   onCarClick,
   onCartClick,
@@ -178,7 +181,16 @@ export function Header({
             MOBILE  (< md) — untouched
             ════════════════════════════════════════════════════════════════════ */}
         <div className="flex items-center justify-between py-3 md:hidden">
-          <div className="flex-1" />
+          <div className="flex-1 flex justify-start items-center min-w-0">
+            <button
+              type="button"
+              onClick={() => onHamburgerClick?.()}
+              aria-label="Цэс нээх"
+              className="p-2 -ml-2 hover:bg-gray-100 rounded-full transition-colors shrink-0"
+            >
+              <Menu className="w-6 h-6 text-gray-800" strokeWidth={2} />
+            </button>
+          </div>
 
           {/* Center: store name with fade transition */}
           <h1
@@ -220,6 +232,17 @@ export function Header({
 
           {/* ── LEFT ────────────────────────────────────────────────────────── */}
           <div className="flex items-center shrink-0" style={{ gap: '32px' }}>
+
+            <button
+              type="button"
+              onClick={() => onHamburgerClick?.()}
+              aria-label="Цэс нээх"
+              className="flex items-center justify-center rounded-full transition-colors shrink-0
+                         text-gray-700 hover:bg-gray-100 hover:text-blue-600"
+              style={{ width: 40, height: 40 }}
+            >
+              <Menu style={{ width: 24, height: 24 }} strokeWidth={2} />
+            </button>
 
             {/* Brand name with fade transition */}
             <span

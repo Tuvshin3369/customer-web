@@ -292,6 +292,10 @@ export default function App() {
       <Header
         brandName={headerTitle}
         onContactClick={() => setIsBranchModalOpen(true)}
+        onHamburgerClick={() => {
+          if (isLoggedIn) setIsUserMenuOpen(true);
+          else setIsLoginModalOpen(true);
+        }}
         onHomeClick={handleHomeClick}
         onCarClick={() => setIsCarModalOpen(true)}
         onJobsClick={() => setIsJobsOpen(true)}
