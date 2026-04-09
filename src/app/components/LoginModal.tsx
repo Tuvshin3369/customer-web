@@ -6,8 +6,8 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRegisterClick: () => void;
-  /** Амжилттай нэвтрэлт — customers.phone-ийг UI-д харуулна */
-  onLoginSuccess?: (ctx: { phoneDisplay: string }) => void;
+  /** Амжилттай нэвтрэлт — утасны нэвтрэлтэд `phone` (баазын түлхүүр), Google зэрэгт зөвхөн `phoneDisplay` */
+  onLoginSuccess?: (ctx: { phoneDisplay: string; phone?: number }) => void;
   onForgotClick?: () => void;
 }
 
@@ -88,7 +88,10 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
     setErrors({});
     try {
       const { phone: phoneNum } = await verifyCustomerLogin(phone, password);
-      onLoginSuccess?.({ phoneDisplay: formatCustomerPhoneDisplay(phoneNum) });
+      onLoginSuccess?.({
+        phone: phoneNum,
+        phoneDisplay: formatCustomerPhoneDisplay(phoneNum),
+      });
       onClose();
     } catch (err: unknown) {
       setErrors({ general: err instanceof Error ? err.message : 'Алдаа гарлаа.' });

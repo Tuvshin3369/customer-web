@@ -29,6 +29,8 @@ interface HeaderProps {
   onMyOrdersClick?:      () => void;
   onHistoryClick?:       () => void;
   onGuestOrdersClick?:   () => void;   // ← guest "Захиалга" button
+  /** Гар утас: нэвтэрсэн хэрэглэгчийн бүтэн цэс (Анкет, захиалга…) — доод «Миний» нь профайл руу шууд ордог */
+  onOpenUserMenu?:       () => void;
   isLoggedIn?:           boolean;
   /** Нэвтэрсэн хэрэглэгчийн утас (байхгүй бол «Хэрэглэгч») */
   loggedInUserLabel?:    string | null;
@@ -141,6 +143,7 @@ export function Header({
   onMyOrdersClick,
   onHistoryClick,
   onGuestOrdersClick,
+  onOpenUserMenu,
   isLoggedIn  = false,
   loggedInUserLabel = null,
   cartCount   = 0,
@@ -245,6 +248,16 @@ export function Header({
           </h1>
 
           <div className="flex-1 flex items-center justify-end gap-1">
+            {isLoggedIn && (
+              <button
+                type="button"
+                onClick={() => onOpenUserMenu?.()}
+                aria-label="Миний цэс"
+                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <User className="w-5 h-5 text-gray-700" />
+              </button>
+            )}
             <button
               onClick={onContactClick}
               aria-label="Холбоо барих"

@@ -1,8 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
-  ChevronLeft, Phone, PhoneCall, Building2,
-  Hash, Lock, Eye, EyeOff, Check, Loader2,
+  ChevronLeft, PhoneCall, Building2,
+  Hash, Lock, Eye, EyeOff, Check, Loader2, AlertCircle,
 } from 'lucide-react';
+import {
+  fetchCustomerProfileByPhone,
+  updateCustomerProfileByPhone,
+  formatCustomerPhoneDisplay,
+  type CustomerProfileSnapshot,
+} from '../lib/customersRegister';
 
 // ── Save-state machine ───────────────────────────────────────────────────────
 type SaveState = 'idle' | 'loading' | 'success';
@@ -10,7 +16,9 @@ type SaveState = 'idle' | 'loading' | 'success';
 interface ProfilePageProps {
   isOpen:         boolean;
   onClose:        () => void;
-  onSaveSuccess?: () => void;  // called after success → App drives navigation
+  onSaveSuccess?: () => void;
+  /** Утас + нууц үгээр нэвтэрсэн үед — баазын customers.phone */
+  customerPhone:   number | null;
 }
 
 // ── Toast ────────────────────────────────────────────────────────────────────
@@ -61,7 +69,6 @@ function InputRow({ icon, readonly, children }: InputRowProps) {
   );
 }
 
-// ── Section card ───────────────────────────────────────��─────────────────────
 function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -76,20 +83,22 @@ function SectionCard({ title, children }: { title: string; children: React.React
   );
 }
 
-// ── Save button ──────────────────────────────────────────────────────────────
 interface SaveButtonProps {
   saveState: SaveState;
   btnScale:  number;
+  disabled:  boolean;
   onClick:   () => void;
 }
-function SaveButton({ saveState, btnScale, onClick }: SaveButtonProps) {
+function SaveButton({ saveState, btnScale, disabled, onClick }: SaveButtonProps) {
   const isLoading = saveState === 'loading';
   const isSuccess = saveState === 'success';
+  const isDisabled = disabled || isLoading || isSuccess;
 
   return (
     <button
+      type="button"
       onClick={onClick}
-      disabled={isLoading || isSuccess}
+      disabled={isDisabled}
       style={{
         transform:  `scale(${btnScale})`,
         transition: 'background-color 0.2s ease, transform 0.15s ease',
@@ -97,7 +106,9 @@ function SaveButton({ saveState, btnScale, onClick }: SaveButtonProps) {
       className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-semibold disabled:cursor-not-allowed ${
         isSuccess
           ? 'bg-green-500 text-white'
-          : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98]'
+          : isDisabled
+            ? 'bg-gray-300 text-gray-500'
+            : 'bg-blue-600 text-white hover:bg-blue-700 active:scale-[0.98]'
       }`}
     >
       {isLoading && (
@@ -118,20 +129,21 @@ function SaveButton({ saveState, btnScale, onClick }: SaveButtonProps) {
 }
 
 // ── Main component ───────────────────────────────────────────────────────────
-export function ProfilePage({ isOpen, onClose, onSaveSuccess }: ProfilePageProps) {
+export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: ProfilePageProps) {
   const [mounted,   setMounted]   = useState(false);
   const [visible,   setVisible]   = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [showToast, setShowToast] = useState(false);
   const [btnScale,  setBtnScale]  = useState(1);
 
-  // When true, scroll-lock cleanup will scroll to 0 instead of restoring savedY
   const navigateToHome = useRef(false);
-
-  // Ref to scroll the inner body to top after save
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // ── Personal info (UI only) ─────────────────────────────────────────────
+  const [baseline, setBaseline] = useState<CustomerProfileSnapshot | null>(null);
+  const [isLoadingProfile, setIsLoadingProfile] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [formErrors, setFormErrors] = useState<{ password?: string; general?: string }>({});
+
   const [extraPhone,      setExtraPhone]      = useState('');
   const [orgName,         setOrgName]         = useState('');
   const [register,        setRegister]        = useState('');
@@ -140,13 +152,36 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess }: ProfilePageProps
   const [showNewPwd,      setShowNewPwd]      = useState(false);
   const [showConfirmPwd,  setShowConfirmPwd]  = useState(false);
 
-  // ── Mount / unmount with slide animation ──────────────────────────────────
+  const headerTitle =
+    customerPhone != null
+      ? `Миний профайл ${formatCustomerPhoneDisplay(customerPhone)}`
+      : 'Миний профайл';
+
+  const dirty = useMemo(() => {
+    if (baseline === null || customerPhone == null) return false;
+    const addDigits = extraPhone.replace(/\D/g, '').slice(0, 8);
+    const baseAdd = baseline.additional_phone.replace(/\D/g, '').slice(0, 8);
+    if (addDigits !== baseAdd) return true;
+    if (orgName.trim() !== baseline.organization_name) return true;
+    if (register.trim().toUpperCase() !== baseline.register) return true;
+    if (newPassword.trim() !== '' || confirmPassword.trim() !== '') return true;
+    return false;
+  }, [baseline, customerPhone, extraPhone, orgName, register, newPassword, confirmPassword]);
+
+  const canSave =
+    dirty &&
+    saveState === 'idle' &&
+    !isLoadingProfile &&
+    baseline !== null &&
+    customerPhone != null;
+
   useEffect(() => {
     if (isOpen) {
       setMounted(true);
       setSaveState('idle');
       setShowToast(false);
       setBtnScale(1);
+      setFormErrors({});
       navigateToHome.current = false;
       requestAnimationFrame(() => requestAnimationFrame(() => setVisible(true)));
     } else {
@@ -156,7 +191,51 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess }: ProfilePageProps
     }
   }, [isOpen]);
 
-  // ── Body scroll lock ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen) return;
+    if (customerPhone == null) {
+      setBaseline(null);
+      setLoadError(null);
+      setIsLoadingProfile(false);
+      setExtraPhone('');
+      setOrgName('');
+      setRegister('');
+      setNewPassword('');
+      setConfirmPassword('');
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingProfile(true);
+    setLoadError(null);
+
+    fetchCustomerProfileByPhone(customerPhone)
+      .then((snap) => {
+        if (cancelled) return;
+        const add8 = snap.additional_phone.replace(/\D/g, '').slice(0, 8);
+        const normSnap: CustomerProfileSnapshot = {
+          ...snap,
+          additional_phone: add8,
+        };
+        setBaseline(normSnap);
+        setExtraPhone(add8);
+        setOrgName(snap.organization_name);
+        setRegister(snap.register);
+        setNewPassword('');
+        setConfirmPassword('');
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoadError(e instanceof Error ? e.message : 'Алдаа гарлаа.');
+        setBaseline(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoadingProfile(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [isOpen, customerPhone]);
+
   useEffect(() => {
     if (!isOpen) return;
     const scrollY = window.scrollY;
@@ -168,38 +247,63 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess }: ProfilePageProps
       document.body.style.position = '';
       document.body.style.top      = '';
       document.body.style.width    = '';
-      // Navigate-to-home flow: always land at scroll 0
       window.scrollTo(0, navigateToHome.current ? 0 : savedY);
       navigateToHome.current = false;
     };
   }, [isOpen]);
 
-  // ── Save handler ──────────────────────────────────────────────────────────
-  function handleSave() {
-    if (saveState !== 'idle') return;
+  async function handleSave() {
+    if (!canSave || customerPhone == null || baseline === null) return;
 
-    // 1. Start loading
+    const pwd = newPassword.trim();
+    const cpwd = confirmPassword.trim();
+    if (pwd !== '' || cpwd !== '') {
+      if (pwd !== cpwd) {
+        setFormErrors({ password: 'Нууц үг таарахгүй байна.' });
+        return;
+      }
+      if (pwd.length < 6) {
+        setFormErrors({ password: 'Нууц үг хамгийн багадаа 6 тэмдэгт байна.' });
+        return;
+      }
+    }
+    setFormErrors({});
     setSaveState('loading');
 
-    // 2. Simulate async (1.3s) → success
-    setTimeout(() => {
-      setSaveState('success');
+    try {
+      await updateCustomerProfileByPhone({
+        phone: customerPhone,
+        baseline,
+        additional_phone: extraPhone,
+        organization_name: orgName,
+        register,
+        newPassword: pwd === '' ? undefined : pwd,
+      });
 
-      // Scale micro-animation: 1 → 1.02 → 1
+      const addDigits = extraPhone.replace(/\D/g, '').slice(0, 8);
+      const nextBaseline: CustomerProfileSnapshot = {
+        additional_phone: addDigits,
+        organization_name: orgName.trim(),
+        register: register.trim().toUpperCase(),
+      };
+      setBaseline(nextBaseline);
+      setNewPassword('');
+      setConfirmPassword('');
+
+      setSaveState('success');
       setBtnScale(1.02);
       setTimeout(() => setBtnScale(1), 180);
-
-      // Show inline toast + scroll inner area to top
       setShowToast(true);
       scrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
 
-      // 3. After 1.5s success display → delegate close + navigation to App
       setTimeout(() => {
-        navigateToHome.current = true;  // skip scroll restore in cleanup
-        onSaveSuccess?.();              // App sets isProfileOpen=false + home state
+        navigateToHome.current = true;
+        onSaveSuccess?.();
       }, 1500);
-
-    }, 1300);
+    } catch (e: unknown) {
+      setSaveState('idle');
+      setFormErrors({ general: e instanceof Error ? e.message : 'Хадгалахад алдаа гарлаа.' });
+    }
   }
 
   if (!mounted) return null;
@@ -212,160 +316,195 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess }: ProfilePageProps
         transition: 'transform 0.22s cubic-bezier(0.32,0.72,0,1)',
       }}
     >
-      {/* ── Top header ──────────────────────────────────────────────────────── */}
       <header className="shrink-0 bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-[640px] mx-auto flex items-center gap-3 px-4 py-3">
           <button
+            type="button"
             onClick={onClose}
             className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors -ml-1"
             aria-label="Буцах"
           >
             <ChevronLeft className="w-5 h-5 text-gray-700" />
           </button>
-          <h1 className="text-base font-semibold text-gray-900 flex-1">Миний профайл</h1>
+          <h1 className="text-base font-semibold text-gray-900 flex-1 min-w-0 truncate">{headerTitle}</h1>
         </div>
       </header>
 
-      {/* ── Scrollable body ──────────────────────────────────────────────────── */}
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto overscroll-contain pb-28 md:pb-10 relative"
       >
-        {/* Toast — floats inside scrollable area, pinned to top */}
         <ProfileToast visible={showToast} />
 
         <div className="max-w-[640px] mx-auto px-4 pt-5 space-y-4">
-
-          {/* ── Section 1: Хувийн мэдээлэл ──────────────────────────────────── */}
-          <SectionCard title="Хувийн мэдээлэл">
-
-            {/* Утасны дугаар — readonly */}
-            <div>
-              <FieldLabel>Утасны дугаар</FieldLabel>
-              <InputRow icon={<Phone className="w-4 h-4" />} readonly>
-                <input
-                  type="tel"
-                  value="9900 0000"
-                  readOnly
-                  tabIndex={-1}
-                  className="flex-1 bg-transparent text-sm text-gray-400 outline-none cursor-not-allowed select-none"
-                />
-              </InputRow>
+          {customerPhone == null && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              Профайлын мэдээллийг ачаалахын тулд утасны дугаар + нууц үгээр нэвтэрнэ үү. (Google-ээр нэвтэрсэн
+              тохиолдолд одоогоор энэ хуудас ажиллахгүй.)
             </div>
+          )}
 
-            {/* Нэмэлт утас */}
-            <div>
-              <FieldLabel>Нэмэлт утас</FieldLabel>
-              <InputRow icon={<PhoneCall className="w-4 h-4" />}>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  placeholder="9911 2233"
-                  value={extraPhone}
-                  onChange={e => setExtraPhone(e.target.value.replace(/\D/g, '').slice(0, 8))}
-                  className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                />
-              </InputRow>
+          {customerPhone != null && isLoadingProfile && (
+            <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-500">
+              <Loader2 className="w-8 h-8 animate-spin" />
+              <p className="text-sm">Ачаалж байна…</p>
             </div>
+          )}
 
-            {/* Байгууллагын нэр */}
-            <div>
-              <FieldLabel>Байгууллагын нэр</FieldLabel>
-              <InputRow icon={<Building2 className="w-4 h-4" />}>
-                <input
-                  type="text"
-                  placeholder="Компанийн нэр"
-                  value={orgName}
-                  onChange={e => setOrgName(e.target.value)}
-                  className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                />
-              </InputRow>
+          {customerPhone != null && loadError && !isLoadingProfile && (
+            <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{loadError}</span>
             </div>
+          )}
 
-            {/* Регистер */}
-            <div>
-              <FieldLabel>Регистер</FieldLabel>
-              <InputRow icon={<Hash className="w-4 h-4" />}>
-                <input
-                  type="text"
-                  placeholder="АА00000000"
-                  value={register}
-                  onChange={e => setRegister(e.target.value.toUpperCase())}
-                  maxLength={10}
-                  className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                />
-              </InputRow>
+          {formErrors.general && (
+            <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{formErrors.general}</span>
             </div>
-          </SectionCard>
+          )}
 
-          {/* ── Section 2: Нууц үг ───────────────────────────────────────────── */}
-          <SectionCard title="Нууц үг">
+          {customerPhone != null && baseline !== null && !isLoadingProfile && (
+            <>
+              <SectionCard title="Хувийн мэдээлэл">
+                <div>
+                  <FieldLabel>Нэмэлт утас</FieldLabel>
+                  <InputRow icon={<PhoneCall className="w-4 h-4" />}>
+                    <input
+                      type="tel"
+                      inputMode="numeric"
+                      placeholder="99112233"
+                      value={extraPhone}
+                      onChange={(e) => {
+                        setExtraPhone(e.target.value.replace(/\D/g, '').slice(0, 8));
+                        setFormErrors({});
+                      }}
+                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                    />
+                  </InputRow>
+                </div>
 
-            {/* Шинэ нууц үг */}
-            <div>
-              <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
-                Шинэ нууц үг
-              </FieldLabel>
-              <InputRow icon={<Lock className="w-4 h-4" />}>
-                <input
-                  type={showNewPwd ? 'text' : 'password'}
-                  placeholder="••••••••"
-                  value={newPassword}
-                  onChange={e => setNewPassword(e.target.value)}
-                  className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                <div>
+                  <FieldLabel>Байгууллагын нэр</FieldLabel>
+                  <InputRow icon={<Building2 className="w-4 h-4" />}>
+                    <input
+                      type="text"
+                      placeholder="Компанийн нэр"
+                      value={orgName}
+                      onChange={(e) => {
+                        setOrgName(e.target.value);
+                        setFormErrors({});
+                      }}
+                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                    />
+                  </InputRow>
+                </div>
+
+                <div>
+                  <FieldLabel>Регистер</FieldLabel>
+                  <InputRow icon={<Hash className="w-4 h-4" />}>
+                    <input
+                      type="text"
+                      placeholder="АА00000000"
+                      value={register}
+                      onChange={(e) => {
+                        setRegister(e.target.value.toUpperCase());
+                        setFormErrors({});
+                      }}
+                      maxLength={10}
+                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                    />
+                  </InputRow>
+                </div>
+              </SectionCard>
+
+              <SectionCard title="Нууц үг">
+                {formErrors.password && (
+                  <p className="text-xs text-red-600 -mt-1 mb-1">{formErrors.password}</p>
+                )}
+                <div>
+                  <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
+                    Шинэ нууц үг
+                  </FieldLabel>
+                  <InputRow icon={<Lock className="w-4 h-4" />}>
+                    <input
+                      type={showNewPwd ? 'text' : 'password'}
+                      placeholder="••••••••"
+                      autoComplete="new-password"
+                      value={newPassword}
+                      onChange={(e) => {
+                        setNewPassword(e.target.value);
+                        setFormErrors({});
+                      }}
+                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPwd((v) => !v)}
+                      className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+                      tabIndex={-1}
+                      aria-label={showNewPwd ? 'Нуух' : 'Харуулах'}
+                    >
+                      {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </InputRow>
+                </div>
+
+                <div>
+                  <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
+                    Нууц үг давтах
+                  </FieldLabel>
+                  <InputRow icon={<Lock className="w-4 h-4" />}>
+                    <input
+                      type={showConfirmPwd ? 'text' : 'password'}
+                      placeholder="••••••••"
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => {
+                        setConfirmPassword(e.target.value);
+                        setFormErrors({});
+                      }}
+                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmPwd((v) => !v)}
+                      className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+                      tabIndex={-1}
+                      aria-label={showConfirmPwd ? 'Нуух' : 'Харуулах'}
+                    >
+                      {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </InputRow>
+                </div>
+              </SectionCard>
+
+              <div className="hidden md:block pt-1 pb-6">
+                <SaveButton
+                  saveState={saveState}
+                  btnScale={btnScale}
+                  disabled={!canSave}
+                  onClick={() => { void handleSave(); }}
                 />
-                <button
-                  type="button"
-                  onClick={() => setShowNewPwd(v => !v)}
-                  className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
-                  tabIndex={-1}
-                  aria-label={showNewPwd ? 'Нуух' : 'Харуулах'}
-                >
-                  {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </InputRow>
-            </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
 
-            {/* Нууц үг давтах */}
-            <div>
-              <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
-                Нууц үг давтах
-              </FieldLabel>
-              <InputRow icon={<Lock className="w-4 h-4" />}>
-                <input
-                  type={showConfirmPwd ? 'text' : 'password'}
-                  placeholder="••••••••"
-                  value={confirmPassword}
-                  onChange={e => setConfirmPassword(e.target.value)}
-                  className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmPwd(v => !v)}
-                  className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
-                  tabIndex={-1}
-                  aria-label={showConfirmPwd ? 'Нуух' : 'Харуулах'}
-                >
-                  {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </InputRow>
-            </div>
-          </SectionCard>
-
-          {/* ── Desktop inline save button ───────────────────────────────────── */}
-          <div className="hidden md:block pt-1 pb-6">
-            <SaveButton saveState={saveState} btnScale={btnScale} onClick={handleSave} />
+      {customerPhone != null && baseline !== null && !isLoadingProfile && (
+        <div className="md:hidden shrink-0 bg-white border-t border-gray-100 px-4 py-3 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
+          <div className="max-w-[640px] mx-auto">
+            <SaveButton
+              saveState={saveState}
+              btnScale={btnScale}
+              disabled={!canSave}
+              onClick={() => { void handleSave(); }}
+            />
           </div>
-
         </div>
-      </div>
-
-      {/* ── Mobile sticky save button ────────────────────────────────────────── */}
-      <div className="md:hidden shrink-0 bg-white border-t border-gray-100 px-4 py-3 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
-        <div className="max-w-[640px] mx-auto">
-          <SaveButton saveState={saveState} btnScale={btnScale} onClick={handleSave} />
-        </div>
-      </div>
+      )}
     </div>
   );
 }

@@ -218,3 +218,106 @@ export async function verifyCustomerLogin(
 export function formatCustomerPhoneDisplay(phone: number): string {
   return String(phone);
 }
+
+/** Профайл форм — баазтай харьцуулахад ашиглана (нэгжүүлсэн утгууд) */
+export interface CustomerProfileSnapshot {
+  additional_phone: string;
+  organization_name: string;
+  register: string;
+}
+
+function normDbText(v: unknown): string {
+  if (v == null) return '';
+  return String(v).trim();
+}
+
+function normAdditionalPhoneFromDb(v: unknown): string {
+  if (v == null) return '';
+  return String(v).replace(/\D/g, '').slice(0, 16);
+}
+
+/** `customers.phone`-аар нэмэлт утас, байгууллага, регистрийг уншина (password_hash авахгүй). */
+export async function fetchCustomerProfileByPhone(phone: number): Promise<CustomerProfileSnapshot> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const q = new URLSearchParams({
+    select: 'additional_phone,organization_name,register',
+    phone: `eq.${phone}`,
+    limit: '1',
+  });
+  const res = await fetch(`${restBase}/rest/v1/customers?${q.toString()}`, {
+    headers: restHeaders(anonKey),
+  });
+  const json = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(formatPostgrestError(json, res) || 'Мэдээлэл ачаалахад алдаа гарлаа.');
+  }
+  if (!Array.isArray(json) || json.length === 0) {
+    throw new Error('Хэрэглэгчийн мэдээлэл олдсонгүй.');
+  }
+  const row = json[0] as Record<string, unknown>;
+  return {
+    additional_phone: normAdditionalPhoneFromDb(row.additional_phone),
+    organization_name: normDbText(row.organization_name),
+    register: normDbText(row.register).toUpperCase(),
+  };
+}
+
+/**
+ * Зөвхөн өөрчлөгдсөн талбаруудыг PATCH хийнэ: additional_phone, organization_name, register, password_hash.
+ * `newPassword` өгөгдсөн бол л password_hash шинэчлэгдэнэ (bcrypt 10).
+ */
+export async function updateCustomerProfileByPhone(params: {
+  phone: number;
+  baseline: CustomerProfileSnapshot;
+  additional_phone: string;
+  organization_name: string;
+  register: string;
+  newPassword?: string;
+}): Promise<void> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const patch: Record<string, unknown> = {};
+
+  const addDigits = params.additional_phone.replace(/\D/g, '').slice(0, 16);
+  if (addDigits !== params.baseline.additional_phone) {
+    if (addDigits === '') {
+      patch.additional_phone = null;
+    } else {
+      const n = Number(addDigits);
+      patch.additional_phone =
+        Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER
+          ? n
+          : addDigits;
+    }
+  }
+
+  const org = params.organization_name.trim();
+  if (org !== params.baseline.organization_name) {
+    patch.organization_name = org === '' ? null : org;
+  }
+
+  const reg = params.register.trim().toUpperCase();
+  if (reg !== params.baseline.register) {
+    patch.register = reg === '' ? null : reg;
+  }
+
+  const pwd = params.newPassword?.trim() ?? '';
+  if (pwd.length > 0) {
+    const { default: bcrypt } = await import('bcryptjs');
+    patch.password_hash = await bcrypt.hash(pwd, 10);
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return;
+  }
+
+  const q = new URLSearchParams({ phone: `eq.${params.phone}` });
+  const res = await fetch(`${restBase}/rest/v1/customers?${q.toString()}`, {
+    method: 'PATCH',
+    headers: { ...restHeaders(anonKey), Prefer: 'return=minimal' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const json = await parseJsonSafely(res);
+    throw new Error(formatPostgrestError(json, res) || 'Хадгалахад алдаа гарлаа.');
+  }
+}

@@ -18,3 +18,8 @@
 
 -- RLS идэвхтэй эсэх:
 -- ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+
+-- Профайл шинэчлэх (customer-web PATCH): зөвхөн DEV / дотоод — anon-д бүх мөрийг
+-- UPDATE нээх нь эрсдэлтэй. PRODUCTION-д RPC эсвэл JWT + RLS ашиглана.
+-- CREATE POLICY "Allow anon update customers profile"
+--   ON public.customers FOR UPDATE TO anon USING (true) WITH CHECK (true);
