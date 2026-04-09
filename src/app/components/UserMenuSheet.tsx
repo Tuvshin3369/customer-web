@@ -9,6 +9,8 @@ interface UserMenuSheetProps {
   onApplicationClick?: () => void;  // ← new "Анкет" handler
   onMyOrdersClick?:  () => void;
   onHistoryClick?:   () => void;  // ← new
+  /** Нэвтэрсэн хэрэглэгчийн утас (байхгүй бол «Хэрэглэгч») */
+  loggedInUserLabel?: string | null;
 }
 
 const MENU_ITEMS = [
@@ -17,7 +19,16 @@ const MENU_ITEMS = [
   { icon: Clock,   label: 'Худалдан авалтын түүх' },
 ] as const;
 
-export function UserMenuSheet({ isOpen, onClose, onLogout, onProfileClick, onApplicationClick, onMyOrdersClick, onHistoryClick }: UserMenuSheetProps) {
+export function UserMenuSheet({
+  isOpen,
+  onClose,
+  onLogout,
+  onProfileClick,
+  onApplicationClick,
+  onMyOrdersClick,
+  onHistoryClick,
+  loggedInUserLabel = null,
+}: UserMenuSheetProps) {
   const [mounted, setMounted] = useState(false);
   const [visible, setVisible] = useState(false);
 
@@ -67,7 +78,9 @@ export function UserMenuSheet({ isOpen, onClose, onLogout, onProfileClick, onApp
         <div className="flex items-center justify-between px-5 pt-3 pb-4 shrink-0">
           <div>
             <p className="text-[11px] text-gray-400 leading-none mb-1">Сайн уу,</p>
-            <h2 className="text-base font-semibold text-gray-900 leading-none">Хэрэглэгч</h2>
+            <h2 className="text-base font-semibold text-gray-900 leading-none">
+              {loggedInUserLabel?.trim() || 'Хэрэглэгч'}
+            </h2>
           </div>
           <button
             onClick={onClose}

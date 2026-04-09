@@ -1,55 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   X, Eye, EyeOff, Phone, Lock, Building2,
-  Hash, ChevronDown, AlertCircle, Loader2,
+  Hash, ChevronDown, AlertCircle, Loader2, Check,
 } from 'lucide-react';
-
-// ─── Supabase auth stub ──────────────────────────────────────────────────────
-//
-// When you connect Supabase, replace the mock below with real calls:
-//
-//   import { createClient } from '@supabase/supabase-js';
-//   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-//
-//   // Register user with phone + password
-//   async function signUpWithPhone(phone: string, password: string) {
-//     const { data, error } = await supabase.auth.signUp({ phone, password });
-//     if (error) throw error;
-//     return data;
-//   }
-//
-//   // After sign-up, save optional org info to a profiles / organizations table:
-//   async function saveOrgProfile(userId: string, orgName: string, regNumber: string) {
-//     const { error } = await supabase
-//       .from('organizations')
-//       .insert({ user_id: userId, name: orgName, registration_number: regNumber });
-//     if (error) throw error;
-//   }
-//
-//   // Register with Google OAuth
-//   async function signUpWithGoogle() {
-//     const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
-//     if (error) throw error;
-//   }
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function mockSignUp(
-  phone: string,
-  _password: string,
-  org?: { name: string; regNumber: string }
-): Promise<void> {
-  await new Promise((res) => setTimeout(res, 1300));
-  // Simulate duplicate-phone error for demo
-  if (phone === '99999999') {
-    throw new Error('Энэ утасны дугаар бүртгэлтэй байна.');
-  }
-  // If org provided → would attach to profile (handled by saveOrgProfile above)
-  if (org?.name) {
-    console.info('[mock] org attached:', org);
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
+import { registerCustomerWithPhone, registerCustomerWithGoogleId } from '../lib/customersRegister';
+import { loadGoogleIdentityScript, requestGoogleUserSub } from '../lib/googleIdentity';
 
 interface FormErrors {
   phone?: string;
@@ -75,6 +30,8 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
   const [errors, setErrors] = useState<FormErrors>({});
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  /** Бүртгэл амжилттай — бааз руу POST дууссаны дараа харуулна */
+  const [registerSuccessKind, setRegisterSuccessKind] = useState<null | 'phone' | 'google'>(null);
 
   // ── Organisation section ─────────────────────────────────────────────────
   const [orgExpanded, setOrgExpanded] = useState(false);
@@ -93,6 +50,7 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
       // Reset on open
       setPhone(''); setPassword(''); setShowPassword(false);
       setErrors({}); setOrgExpanded(false); setOrgName(''); setOrgRegNumber('');
+      setRegisterSuccessKind(null);
     } else {
       setVisible(false);
       const t = setTimeout(() => setMounted(false), 300);
@@ -145,12 +103,13 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
     setLoading(true);
     setErrors({});
     try {
-      const orgPayload =
-        orgName.trim() || orgRegNumber.trim()
-          ? { name: orgName.trim(), regNumber: orgRegNumber.trim() }
-          : undefined;
-      await mockSignUp(phone, password, orgPayload);
-      onClose();
+      await registerCustomerWithPhone({
+        phone,
+        password,
+        organizationName: orgName.trim() || undefined,
+        register: orgRegNumber.trim() || undefined,
+      });
+      setRegisterSuccessKind('phone');
     } catch (err: unknown) {
       setErrors({ general: err instanceof Error ? err.message : 'Алдаа гарлаа.' });
     } finally {
@@ -160,10 +119,21 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
 
   async function handleGoogle() {
     setGoogleLoading(true);
-    // Replace with: await signUpWithGoogle();
-    await new Promise((res) => setTimeout(res, 1000));
-    setGoogleLoading(false);
-    onClose();
+    setErrors({});
+    try {
+      const clientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim();
+      if (!clientId) {
+        throw new Error('Google OAuth тохируулаагүй байна. (VITE_GOOGLE_CLIENT_ID)');
+      }
+      await loadGoogleIdentityScript();
+      const sub = await requestGoogleUserSub(clientId);
+      await registerCustomerWithGoogleId(sub);
+      setRegisterSuccessKind('google');
+    } catch (err: unknown) {
+      setErrors({ general: err instanceof Error ? err.message : 'Алдаа гарлаа.' });
+    } finally {
+      setGoogleLoading(false);
+    }
   }
 
   const canSubmit = phone.trim().length > 0 && password.length > 0 && !loading;
@@ -206,17 +176,48 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
             Шинэ данс үүсгэхийн тулд мэдээллээ оруулна уу.
           </p>
 
+          {registerSuccessKind && (
+            <div className="rounded-xl border border-green-200 bg-green-50/90 px-4 py-5 mb-4 text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-green-100">
+                <Check className="h-6 w-6 text-green-600" strokeWidth={2.5} />
+              </div>
+              <p className="text-sm font-semibold text-gray-900">Бүртгэл амжилттай</p>
+              <p className="mt-1.5 text-xs text-gray-600 leading-relaxed">
+                {registerSuccessKind === 'phone'
+                  ? 'Мэдээлэл серверт хадгалагдлаа. Одоо нэвтэрнэ үү.'
+                  : 'Google дансаар бүртгэгдлээ. Утас/нууц үгээр нэвтрэхэд мөрөнд утас бөглөсөн эсэхээ шалгана уу.'}
+              </p>
+              <div className="mt-4 flex flex-col gap-2">
+                <button
+                  type="button"
+                  onClick={() => { onClose(); onLoginClick(); }}
+                  className="w-full rounded-xl bg-blue-600 py-2.5 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+                >
+                  Нэвтрэх
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onClose()}
+                  className="w-full rounded-xl border border-gray-200 bg-white py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  Хаах
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* ── General error ─────────────────────────────────────────────── */}
-          {errors.general && (
+          {!registerSuccessKind && errors.general && (
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3 py-2.5 mb-4">
               <AlertCircle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
               <span className="text-xs text-red-600">{errors.general}</span>
             </div>
           )}
 
-          {/* ════════════════════════════════════════════════════════════════
+          {/*           ════════════════════════════════════════════════════════════════
               SECTION 1 – Basic information
           ════════════════════════════════════════════════════════════════ */}
+          {!registerSuccessKind && (
           <form onSubmit={handleRegister} noValidate>
             <div className="space-y-4">
 
@@ -315,15 +316,19 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
               {loading ? 'Бүртгэж байна...' : 'Бүртгүүлэх'}
             </button>
           </form>
+          )}
 
           {/* ── Divider ──────────────────────────────────────────────────── */}
+          {!registerSuccessKind && (
           <div className="flex items-center gap-3 my-4">
             <div className="flex-1 h-px bg-gray-200" />
             <span className="text-xs text-gray-400">эсвэл</span>
             <div className="flex-1 h-px bg-gray-200" />
           </div>
+          )}
 
           {/* ── Google sign-up ───────────────────────────────────────────── */}
+          {!registerSuccessKind && (
           <button
             type="button"
             onClick={handleGoogle}
@@ -335,10 +340,12 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
               : <GoogleIcon />}
             Google-ээр бүртгүүлэх
           </button>
+          )}
 
           {/* ════════════════════════════════════════════════════════════════
               SECTION 2 – Organisation (optional, collapsible)
           ════════════════════════════════════════════════════════════════ */}
+          {!registerSuccessKind && (
           <div className="mt-4 border border-gray-200 rounded-xl overflow-hidden">
             {/* Accordion header */}
             <button
@@ -413,8 +420,10 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
               </div>
             </div>
           </div>
+          )}
 
           {/* ── Footer ───────────────────────────────────────────────────── */}
+          {!registerSuccessKind && (
           <div className="mt-5 text-center">
             <p className="text-xs text-gray-500">
               Бүртгэлтэй юу?{' '}
@@ -427,6 +436,7 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
               </button>
             </p>
           </div>
+          )}
         </div>
       </div>
     </div>

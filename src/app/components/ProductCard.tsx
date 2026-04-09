@@ -41,7 +41,7 @@ export function ProductCard({ product, onConfigureProduct }: ProductCardProps) {
         />
 
         {/* Discount badge — top-left only */}
-        {product.discount && (
+        {(product.discount ?? 0) > 0 && (
           <div className="absolute top-2 left-2 bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded pointer-events-none shadow-sm">
             -{product.discount}%
           </div>

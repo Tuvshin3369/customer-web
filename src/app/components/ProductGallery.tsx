@@ -30,6 +30,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
@@ -276,14 +277,14 @@ export function ProductGallery({
       ? 'none'
       : `transform ${TRANSITION_MS}ms ease-in-out`;
 
-  return (
+  const galleryUi = (
     <div
       ref={galleryRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Зургийн галерей"
+      aria-label="ProductGallery — бүтэн дэлгэцийн зургийн галерей"
       tabIndex={-1}
-      className="fixed inset-0 z-[150] flex flex-col bg-black outline-none"
+      className="fixed inset-0 z-[220] flex flex-col bg-black outline-none"
       style={{
         opacity:    visible ? 1 : 0,
         transition: 'opacity 0.25s ease',
@@ -472,4 +473,9 @@ export function ProductGallery({
       />
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(galleryUi, document.body);
+  }
+  return null;
 }

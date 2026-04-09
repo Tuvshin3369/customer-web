@@ -1,37 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Eye, EyeOff, Phone, Lock, AlertCircle, Loader2 } from 'lucide-react';
+import { verifyCustomerLogin, formatCustomerPhoneDisplay } from '../lib/customersRegister';
 
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRegisterClick: () => void;
-  onLoginSuccess?: () => void;
+  /** Амжилттай нэвтрэлт — customers.phone-ийг UI-д харуулна */
+  onLoginSuccess?: (ctx: { phoneDisplay: string }) => void;
   onForgotClick?: () => void;
-}
-
-// ─── Supabase auth stub ───────────────────────────────────────────────────────
-// Replace this section with real Supabase calls when you connect a project:
-//
-//   import { createClient } from '@supabase/supabase-js';
-//   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-//
-//   async function signInWithPhone(phone: string, password: string) {
-//     const { data, error } = await supabase.auth.signInWithPassword({ phone, password });
-//     if (error) throw error;
-//     return data;
-//   }
-//
-//   async function signInWithGoogle() {
-//     const { error } = await supabase.auth.signInWithOAuth({ provider: 'google' });
-//     if (error) throw error;
-//   }
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function mockSignIn(phone: string, password: string): Promise<void> {
-  await new Promise((res) => setTimeout(res, 1200));
-  // Simulate a wrong-credential error for demo purposes
-  if (password === 'wrong') throw new Error('Утасны дугаар эсвэл нууц үг буруу байна.');
-  // Otherwise succeed silently
 }
 
 interface FormErrors {
@@ -110,8 +87,8 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
     setLoading(true);
     setErrors({});
     try {
-      await mockSignIn(phone, password);
-      onLoginSuccess?.();
+      const { phone: phoneNum } = await verifyCustomerLogin(phone, password);
+      onLoginSuccess?.({ phoneDisplay: formatCustomerPhoneDisplay(phoneNum) });
       onClose();
     } catch (err: unknown) {
       setErrors({ general: err instanceof Error ? err.message : 'Алдаа гарлаа.' });
@@ -122,11 +99,13 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
 
   async function handleGoogle() {
     setGoogleLoading(true);
-    // Replace with: await signInWithGoogle();
-    await new Promise((res) => setTimeout(res, 1000));
-    setGoogleLoading(false);
-    onLoginSuccess?.();
-    onClose();
+    try {
+      await new Promise((res) => setTimeout(res, 1000));
+      onLoginSuccess?.({ phoneDisplay: '' });
+      onClose();
+    } finally {
+      setGoogleLoading(false);
+    }
   }
 
   const canSubmit = phone.trim().length > 0 && password.length > 0 && !loading;

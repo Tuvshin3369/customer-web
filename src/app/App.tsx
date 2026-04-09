@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Check, ShoppingCart } from 'lucide-react';
 import { Header } from './components/Header';
 import { SearchBar } from './components/SearchBar';
@@ -24,23 +24,8 @@ import { ForgotPasswordModal } from './components/ForgotPasswordModal';
 import { GuestOrdersPage } from './components/GuestOrdersPage';
 import { JobsPage } from './components/JobsPage';
 import { ApplicationPage } from './components/ApplicationPage';
-import { mockBrands } from './data';
-import { Product, CartItem } from './types';
+import { Product, CartItem, ChildProduct } from './types';
 import { calculateTotal } from './utils/priceCalc';
-
-// ── Brand → Store display mapping (UI-only, hardcoded) ───────────────────────
-// When a brand chip is active, the Header shows the store name, NOT the brand name.
-// Switching between brands within the same store keeps the title unchanged.
-const BRAND_TO_STORE: Record<string, string> = {
-  'MODERN UI':    'Store A',
-  'LUXURY':       'Store A',
-  'ACTIVE':       'Store A',
-  'SPORT PRO':    'Store B',
-  'URBAN STYLE':  'Store B',
-  'CLASSIC LINE': 'Store B',
-  'TECH ZONE':    'Store B',
-  'PREMIUM LAB':  'Store B',
-};
 
 const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
 
@@ -50,9 +35,199 @@ interface StoreFromApi {
   facebook_messenger_url: string | null;
 }
 
+interface BrandRow {
+  id: string;
+  brand_name: string;
+  order_number: number;
+  /** Онлайн зарах нэмэлт хөнгөлөлтийн хувь */
+  online_discount_percent: number;
+}
+
+interface CategoryRow {
+  id: string;
+  category_name: string;
+  sequence_number: number;
+}
+
+async function parseJsonSafely(res: Response): Promise<unknown> {
+  const raw = await res.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error(`HTTP ${res.status}`);
+  }
+}
+
+function numField(v: unknown, fallback = 0): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * product_images-аас бүх зургийн URL (дараалал хадгалагдана, давхардлыг алгасна).
+ */
+function allUrlsFromProductImages(value: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (u: string) => {
+    const t = u.trim();
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+
+  function walk(v: unknown): void {
+    if (v == null) return;
+    if (typeof v === 'string') {
+      const s = v.trim();
+      if (!s) return;
+      if (s.startsWith('[') || s.startsWith('{')) {
+        try {
+          walk(JSON.parse(s) as unknown);
+          return;
+        } catch {
+          /* зөв JSON биш */
+        }
+      }
+      push(s);
+      return;
+    }
+    if (!Array.isArray(v)) return;
+    for (const item of v) {
+      if (typeof item === 'string') push(item);
+      else if (item && typeof item === 'object' && 'url' in item && typeof (item as { url: unknown }).url === 'string') {
+        push((item as { url: string }).url);
+      }
+    }
+  }
+
+  walk(value);
+  return out;
+}
+
+function firstUrlFromProductImages(value: unknown): string {
+  return allUrlsFromProductImages(value)[0] ?? '';
+}
+
+const GOODS_BALANCE_CHUNK = 80;
+
+/**
+ * goods_balance: branch_id + product_id бүрт үлдэгдэл.
+ * Нэг барааны бүх салбарын үлдэгдлийг product_id-ээр нийлбэрлэнэ.
+ */
+async function fetchGoodsBalanceTotals(
+  restBase: string,
+  anonKey: string,
+  productIds: string[],
+): Promise<Record<string, number>> {
+  const totals: Record<string, number> = {};
+  if (productIds.length === 0) return totals;
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    Accept: 'application/json',
+  };
+  for (let i = 0; i < productIds.length; i += GOODS_BALANCE_CHUNK) {
+    const chunk = productIds.slice(i, i + GOODS_BALANCE_CHUNK);
+    const query = new URLSearchParams({
+      select: 'branch_id,product_id,goods_balance',
+      product_id: `in.(${chunk.join(',')})`,
+    });
+    try {
+      const res = await fetch(`${restBase}/rest/v1/goods_balance?${query.toString()}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok || !Array.isArray(json)) continue;
+      for (const row of json as Record<string, unknown>[]) {
+        const pid = row.product_id != null ? String(row.product_id) : '';
+        if (!pid) continue;
+        totals[pid] = (totals[pid] ?? 0) + numField(row.goods_balance, 0);
+      }
+    } catch {
+      /* RLS эсвэл хүснэгтийн нэр */
+    }
+  }
+  return totals;
+}
+
+const RELATED_PRODUCT_KEYS = [
+  'related_product_1_id',
+  'related_product_2_id',
+  'related_product_3_id',
+  'related_product_4_id',
+] as const;
+
+const PRODUCTS_LIST_SELECT =
+  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+
+function mapRowToChildProduct(
+  row: Record<string, unknown>,
+  pid: string,
+  onlinePct: number,
+  stock: number,
+): ChildProduct | null {
+  const nm =
+    typeof row.product_name === 'string'
+      ? row.product_name.trim()
+      : String(row.product_name ?? '');
+  if (!nm) return null;
+  const imageUrls = allUrlsFromProductImages(row.product_images);
+  const img = imageUrls[0] || 'https://via.placeholder.com/400x500?text=No+Image';
+  const retail = numField(row.retail_price, 0);
+  const productDisc = numField(row.discount, 0);
+  const totalDisc = Math.min(100, Math.max(0, productDisc + onlinePct));
+  const hasDisc = totalDisc > 0 && retail > 0;
+  const price = hasDisc ? Math.round(retail * (1 - totalDisc / 100)) : retail;
+  return {
+    id: pid,
+    name: nm,
+    stock,
+    price,
+    imageUrl: img,
+    images: imageUrls.length > 0 ? imageUrls : undefined,
+  };
+}
+
+async function fetchProductRowsByIds(
+  restBase: string,
+  anonKey: string,
+  ids: string[],
+  storeId: string,
+  select: string,
+): Promise<Record<string, Record<string, unknown>>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  if (ids.length === 0) return out;
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    Accept: 'application/json',
+  };
+  for (let i = 0; i < ids.length; i += GOODS_BALANCE_CHUNK) {
+    const chunk = ids.slice(i, i + GOODS_BALANCE_CHUNK);
+    const query = new URLSearchParams({
+      select,
+      id: `in.(${chunk.join(',')})`,
+      store_id: `eq.${storeId}`,
+      is_inactive: 'eq.false',
+    });
+    try {
+      const res = await fetch(`${restBase}/rest/v1/products?${query.toString()}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok || !Array.isArray(json)) continue;
+      for (const raw of json as Record<string, unknown>[]) {
+        const id = raw.id != null ? String(raw.id) : '';
+        if (id) out[id] = raw;
+      }
+    } catch {
+      /* RLS */
+    }
+  }
+  return out;
+}
+
 export default function App() {
   // ── Filters ──────────────────────────────────────────────────────────────
-  const [selectedBrand,    setSelectedBrand]    = useState('MODERN UI');
+  const [selectedBrandId, setSelectedBrandId] = useState<string>('');
   const [selectedCategory, setSelectedCategory] = useState('Бүх бараа');
   const [searchQuery,      setSearchQuery]      = useState('');
 
@@ -72,9 +247,9 @@ export default function App() {
   const [isJobsOpen,           setIsJobsOpen]           = useState(false);
   const [isApplicationOpen,    setIsApplicationOpen]    = useState(false);
 
-  // ── Cart store lock (UI only) ─────────────────────────────────────────────
-  // Set to the store name of the first cart item; null when cart is empty.
-  const [activeCartStore, setActiveCartStore] = useState<string | null>(null);
+  // ── Cart store lock — сагсанд бараа байхад өөр дэлгүүр сонгохыг хориглоно ──
+  const [activeCartStoreId, setActiveCartStoreId] = useState<string | null>(null);
+  const [lockedStoreDisplayName, setLockedStoreDisplayName] = useState<string | null>(null);
   // Toast shown when user tries to switch to a locked-out store
   const [showLockedToast, setShowLockedToast] = useState(false);
 
@@ -85,15 +260,9 @@ export default function App() {
   const [stores, setStores] = useState<StoreFromApi[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
 
-  async function parseJsonSafely(res: Response) {
-    const raw = await res.text();
-    if (!raw) return null;
-    try {
-      return JSON.parse(raw);
-    } catch {
-      throw new Error(`HTTP ${res.status}`);
-    }
-  }
+  const [brandRows, setBrandRows] = useState<BrandRow[]>([]);
+  const [categoryRows, setCategoryRows] = useState<CategoryRow[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
 
   async function fetchStores() {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -166,6 +335,10 @@ export default function App() {
   }, []);
 
   function handleStoreSelect(id: string) {
+    if (cartItems.length > 0 && activeCartStoreId != null && id !== activeCartStoreId) {
+      fireLockedToast();
+      return;
+    }
     setSelectedStoreId(id);
     try {
       window.localStorage.setItem(SELECTED_STORE_STORAGE_KEY, id);
@@ -174,26 +347,265 @@ export default function App() {
     }
   }
 
+  const fetchBrandsForStore = useCallback(async (storeId: string | null) => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!storeId || !supabaseUrl || !supabaseAnonKey) {
+      setBrandRows([]);
+      setSelectedBrandId('');
+      return;
+    }
+    try {
+      const query = new URLSearchParams({
+        select: 'id,brand_name,order_number,online_discount_percent',
+        store_id: `eq.${storeId}`,
+        is_online_active: 'eq.true',
+        order: 'order_number.asc',
+      });
+      const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/brands?${query.toString()}`, {
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          Accept: 'application/json',
+        },
+      });
+      const json = await parseJsonSafely(res);
+      if (!res.ok) {
+        throw new Error((json as { message?: string } | null)?.message || `HTTP ${res.status}`);
+      }
+      if (!Array.isArray(json)) {
+        setBrandRows([]);
+        setSelectedBrandId('');
+        return;
+      }
+      const mapped: BrandRow[] = json
+        .map((row: Record<string, unknown>) => ({
+          id: row.id != null ? String(row.id) : '',
+          brand_name: typeof row.brand_name === 'string' ? row.brand_name.trim() : '',
+          order_number: typeof row.order_number === 'number' && Number.isFinite(row.order_number)
+            ? row.order_number
+            : Number(row.order_number ?? 0),
+          online_discount_percent: numField(row.online_discount_percent, 0),
+        }))
+        .filter((r) => r.id.length > 0 && r.brand_name.length > 0);
+      setBrandRows(mapped);
+      setSelectedBrandId((prev) => {
+        if (prev && mapped.some((b) => b.id === prev)) return prev;
+        return mapped[0]?.id ?? '';
+      });
+    } catch (err) {
+      console.error('fetchBrandsForStore error:', err);
+      setBrandRows([]);
+      setSelectedBrandId('');
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchBrandsForStore(selectedStoreId);
+  }, [selectedStoreId, fetchBrandsForStore]);
+
+  const fetchCategoriesForBrand = useCallback(async (brandId: string | null) => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!brandId || !supabaseUrl || !supabaseAnonKey) {
+      setCategoryRows([]);
+      return;
+    }
+    try {
+      const query = new URLSearchParams({
+        select: 'id,category_name,sequence_number',
+        brand_id: `eq.${brandId}`,
+        order: 'sequence_number.asc',
+      });
+      const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/categories?${query.toString()}`, {
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          Accept: 'application/json',
+        },
+      });
+      const json = await parseJsonSafely(res);
+      if (!res.ok) {
+        throw new Error((json as { message?: string } | null)?.message || `HTTP ${res.status}`);
+      }
+      if (!Array.isArray(json)) {
+        setCategoryRows([]);
+        return;
+      }
+      const mapped: CategoryRow[] = json
+        .map((row: Record<string, unknown>) => ({
+          id: row.id != null ? String(row.id) : '',
+          category_name: typeof row.category_name === 'string' ? row.category_name.trim() : '',
+          sequence_number:
+            typeof row.sequence_number === 'number' && Number.isFinite(row.sequence_number)
+              ? row.sequence_number
+              : Number(row.sequence_number ?? 0),
+        }))
+        .filter((r) => r.id.length > 0 && r.category_name.length > 0);
+      setCategoryRows(mapped);
+    } catch (err) {
+      console.error('fetchCategoriesForBrand error:', err);
+      setCategoryRows([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCategoriesForBrand(selectedBrandId || null);
+  }, [selectedBrandId, fetchCategoriesForBrand]);
+
+  const selectedBrandOnlineDiscount = useMemo(() => {
+    const b = brandRows.find((x) => x.id === selectedBrandId);
+    return b != null ? numField(b.online_discount_percent, 0) : 0;
+  }, [brandRows, selectedBrandId]);
+
+  const fetchProductsForBrand = useCallback(async () => {
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!selectedStoreId || !selectedBrandId || !supabaseUrl || !supabaseAnonKey) {
+      setProducts([]);
+      return;
+    }
+    const restBase = supabaseUrl.replace(/\/$/, '');
+    const onlinePct = selectedBrandOnlineDiscount;
+    try {
+      const query = new URLSearchParams({
+        select: PRODUCTS_LIST_SELECT,
+        store_id: `eq.${selectedStoreId}`,
+        brand_id: `eq.${selectedBrandId}`,
+        is_inactive: 'eq.false',
+        order: 'display_order.asc',
+      });
+      const res = await fetch(`${restBase}/rest/v1/products?${query.toString()}`, {
+        headers: {
+          apikey: supabaseAnonKey,
+          Authorization: `Bearer ${supabaseAnonKey}`,
+          Accept: 'application/json',
+        },
+      });
+      const json = await parseJsonSafely(res);
+      if (!res.ok) {
+        throw new Error((json as { message?: string } | null)?.message || `HTTP ${res.status}`);
+      }
+      const rows = Array.isArray(json) ? json : [];
+      const productIds = rows
+        .map((r) => (r as Record<string, unknown>).id)
+        .filter((id) => id != null && id !== '')
+        .map(String);
+      const relatedIdSet = new Set<string>();
+      for (const r of rows as Record<string, unknown>[]) {
+        const selfId = r.id != null ? String(r.id) : '';
+        for (const key of RELATED_PRODUCT_KEYS) {
+          const v = r[key];
+          if (v == null || v === '') continue;
+          const rid = String(v);
+          if (rid !== selfId) relatedIdSet.add(rid);
+        }
+      }
+      const balanceIds = [...new Set([...productIds, ...relatedIdSet])];
+      const balanceByProduct = await fetchGoodsBalanceTotals(restBase, supabaseAnonKey, balanceIds);
+
+      const relatedRowById =
+        relatedIdSet.size > 0 && selectedStoreId
+          ? await fetchProductRowsByIds(
+              restBase,
+              supabaseAnonKey,
+              [...relatedIdSet],
+              selectedStoreId,
+              PRODUCTS_LIST_SELECT,
+            )
+          : {};
+
+      const mapped: Product[] = (rows as Record<string, unknown>[])
+        .map((row) => {
+          const cid = row.category_id != null && row.category_id !== '' ? String(row.category_id) : '';
+          const pid = row.id != null ? String(row.id) : '';
+          const nm =
+            typeof row.product_name === 'string'
+              ? row.product_name.trim()
+              : String(row.product_name ?? '');
+          const imageUrls = allUrlsFromProductImages(row.product_images);
+          const img = imageUrls[0] || 'https://via.placeholder.com/400x500?text=No+Image';
+          const retail = numField(row.retail_price, 0);
+          const productDisc = numField(row.discount, 0);
+          const totalDiscRaw = productDisc + onlinePct;
+          const totalDisc = Math.min(100, Math.max(0, totalDiscRaw));
+          const hasDisc = totalDisc > 0 && retail > 0;
+          const saleUnit = hasDisc ? retail * (1 - totalDisc / 100) : retail;
+          const saleRounded = Math.round(saleUnit);
+          const manualRaw =
+            typeof row.product_manual === 'string' ? row.product_manual.trim() : '';
+          const manualUrl = manualRaw.length > 0 ? manualRaw : undefined;
+          const seenRel = new Set<string>();
+          const relatedIdsOrdered: string[] = [];
+          for (const key of RELATED_PRODUCT_KEYS) {
+            const v = row[key];
+            if (v == null || v === '') continue;
+            const rid = String(v);
+            if (rid === pid || seenRel.has(rid)) continue;
+            seenRel.add(rid);
+            relatedIdsOrdered.push(rid);
+          }
+          const children: ChildProduct[] = [];
+          for (const rid of relatedIdsOrdered) {
+            const rrow = relatedRowById[rid];
+            if (!rrow) continue;
+            const child = mapRowToChildProduct(
+              rrow,
+              rid,
+              onlinePct,
+              balanceByProduct[rid] ?? 0,
+            );
+            if (child) children.push(child);
+          }
+          return {
+            id: pid,
+            store_id: selectedStoreId,
+            categoryId: cid || undefined,
+            displayOrder: numField(row.display_order, 0),
+            is_coded_paint: row.is_coded_paint === true,
+            is_foam_range: row.is_foam_range === true,
+            is_calculate_length: row.is_calculate_length === true,
+            name: nm,
+            category: 'Бусад',
+            price: retail,
+            basePrice: hasDisc ? saleRounded : retail,
+            oldPrice: hasDisc ? retail : undefined,
+            discount: hasDisc ? Math.round(totalDisc * 100) / 100 : undefined,
+            stock: balanceByProduct[pid] ?? 0,
+            imageUrl: img,
+            images: imageUrls.length > 0 ? imageUrls : undefined,
+            manualUrl,
+            isParent: children.length > 0,
+            children: children.length > 0 ? children : undefined,
+          } satisfies Product;
+        })
+        .filter((p) => p.id.length > 0 && p.name.length > 0);
+      setProducts(mapped);
+    } catch (err) {
+      console.error('fetchProductsForBrand error:', err);
+      setProducts([]);
+    }
+  }, [selectedStoreId, selectedBrandId, selectedBrandOnlineDiscount]);
+
+  useEffect(() => {
+    fetchProductsForBrand();
+  }, [fetchProductsForBrand]);
+
+  useEffect(() => {
+    setSelectedCategory('Бүх бараа');
+  }, [selectedBrandId]);
+
   function fireLockedToast() {
     setShowLockedToast(true);
     setTimeout(() => setShowLockedToast(false), 2200);
   }
 
-  // Auto-reset lock when cart empties
   useEffect(() => {
-    if (cartItems.length === 0) setActiveCartStore(null);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cartItems.length]);
-
-  // Auto-switch brand if the locked store doesn't include the current brand
-  useEffect(() => {
-    if (!activeCartStore) return;
-    if ((BRAND_TO_STORE[selectedBrand] ?? '') !== activeCartStore) {
-      const first = Object.keys(BRAND_TO_STORE).find(b => BRAND_TO_STORE[b] === activeCartStore);
-      if (first) { setSelectedBrand(first); setSelectedCategory('Бүх бараа'); }
+    if (cartItems.length === 0) {
+      setActiveCartStoreId(null);
+      setLockedStoreDisplayName(null);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeCartStore]);
+  }, [cartItems.length]);
 
   // ── Home toast (shown after profile save) ────────────────────────────────
   const [showHomeToast, setShowHomeToast] = useState(false);
@@ -201,9 +613,18 @@ export default function App() {
 
   // ── Auth state (UI only) ─────────────────────────────────────────────────
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  /** Нэвтрэхэд утасны дугаар (хоосон бол «Хэрэглэгч») */
+  const [loggedInUserLabel, setLoggedInUserLabel] = useState<string | null>(null);
 
-  function handleLoginSuccess() { setIsLoggedIn(true); }
-  function handleLogout()        { setIsLoggedIn(false); }
+  function handleLoginSuccess(ctx?: { phoneDisplay: string }) {
+    setIsLoggedIn(true);
+    const t = ctx?.phoneDisplay?.trim() ?? '';
+    setLoggedInUserLabel(t.length > 0 ? t : null);
+  }
+  function handleLogout() {
+    setIsLoggedIn(false);
+    setLoggedInUserLabel(null);
+  }
 
   function handleOpenProfile() {
     setIsUserMenuOpen(false);
@@ -259,21 +680,21 @@ export default function App() {
   function handleConfigureProduct(product: Product) { setConfigProduct(product); }
 
   function handleAddConfiguredItem(item: CartItem) {
-    // Lock store on first add
     if (cartItems.length === 0) {
-      const store = BRAND_TO_STORE[selectedBrand];
-      if (store) setActiveCartStore(store);
+      if (selectedStoreId) setActiveCartStoreId(selectedStoreId);
+      const nm = stores.find((s) => s.id === selectedStoreId)?.name?.trim();
+      if (nm) setLockedStoreDisplayName(nm);
     }
-    setCartItems(prev => [...prev, item]);
+    setCartItems((prev) => [...prev, item]);
   }
 
   function handleAddChildItems(items: CartItem[]) {
-    // Lock store on first add
     if (cartItems.length === 0 && items.length > 0) {
-      const store = BRAND_TO_STORE[selectedBrand];
-      if (store) setActiveCartStore(store);
+      if (selectedStoreId) setActiveCartStoreId(selectedStoreId);
+      const nm = stores.find((s) => s.id === selectedStoreId)?.name?.trim();
+      if (nm) setLockedStoreDisplayName(nm);
     }
-    setCartItems(prev => [...prev, ...items]);
+    setCartItems((prev) => [...prev, ...items]);
   }
 
   function handleUpdateQuantity(cartItemId: string, quantity: number) {
@@ -286,44 +707,86 @@ export default function App() {
   }
 
   function handleRemoveItem(cartItemId: string) {
-    setCartItems(prev => {
-      const next = prev.filter(item => item.cartItemId !== cartItemId);
-      if (next.length === 0) setActiveCartStore(null);
+    setCartItems((prev) => {
+      const next = prev.filter((item) => item.cartItemId !== cartItemId);
+      if (next.length === 0) {
+        setActiveCartStoreId(null);
+        setLockedStoreDisplayName(null);
+      }
       return next;
     });
   }
 
-  // ── Brand / category / product derivations ───────────────────────────────
-  const brandNames = useMemo(() => mockBrands.map(b => b.name), []);
-
-  // Visible brand chips — filtered to active store when cart is locked
-  const visibleBrandNames = useMemo(
-    () =>
-      activeCartStore
-        ? brandNames.filter(b => (BRAND_TO_STORE[b] ?? '') === activeCartStore)
-        : brandNames,
-    [brandNames, activeCartStore],
+  const brandChipOptions = useMemo(
+    () => brandRows.map((b) => ({ id: b.id, brandName: b.brand_name })),
+    [brandRows],
   );
 
-  const currentBrand = useMemo(
-    () => mockBrands.find(b => b.name === selectedBrand),
-    [selectedBrand],
+  const activeBrandDisplayName = useMemo(
+    () => brandRows.find((b) => b.id === selectedBrandId)?.brand_name ?? '',
+    [brandRows, selectedBrandId],
+  );
+
+  const categoryNameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    categoryRows.forEach((c) => {
+      m[c.id] = c.category_name;
+    });
+    return m;
+  }, [categoryRows]);
+
+  const categorySequenceById = useMemo(() => {
+    const m: Record<string, number> = {};
+    categoryRows.forEach((c) => {
+      m[c.id] = c.sequence_number;
+    });
+    return m;
+  }, [categoryRows]);
+
+  const productsLabeled = useMemo(
+    () =>
+      products.map((p) => {
+        const cid = p.categoryId != null && p.categoryId !== '' ? String(p.categoryId) : '';
+        const label = cid && categoryNameById[cid] ? categoryNameById[cid] : 'Бусад';
+        return { ...p, category: label };
+      }),
+    [products, categoryNameById],
   );
 
   const categoryNames = useMemo(
-    () => currentBrand?.categories.map(c => c.name) || [],
-    [currentBrand],
+    () => categoryRows.map((c) => c.category_name),
+    [categoryRows],
   );
 
   const currentProducts = useMemo(() => {
-    if (!currentBrand) return [];
+    const unknownCategorySeq = Number.MAX_SAFE_INTEGER;
+    const byCategoryThenDisplay = (a: Product, b: Product) => {
+      const seqA =
+        a.categoryId != null && categorySequenceById[a.categoryId] != null
+          ? categorySequenceById[a.categoryId]
+          : unknownCategorySeq;
+      const seqB =
+        b.categoryId != null && categorySequenceById[b.categoryId] != null
+          ? categorySequenceById[b.categoryId]
+          : unknownCategorySeq;
+      if (seqA !== seqB) return seqA - seqB;
+      const dA = a.displayOrder ?? 0;
+      const dB = b.displayOrder ?? 0;
+      if (dA !== dB) return dA - dB;
+      return String(a.id).localeCompare(String(b.id));
+    };
+    const byDisplayOnly = (a: Product, b: Product) => {
+      const dA = a.displayOrder ?? 0;
+      const dB = b.displayOrder ?? 0;
+      if (dA !== dB) return dA - dB;
+      return String(a.id).localeCompare(String(b.id));
+    };
+
     if (selectedCategory === 'Бүх бараа') {
-      const all: Product[] = [];
-      currentBrand.categories.forEach(c => all.push(...c.products));
-      return all;
+      return [...productsLabeled].sort(byCategoryThenDisplay);
     }
-    return currentBrand.categories.find(c => c.name === selectedCategory)?.products || [];
-  }, [currentBrand, selectedCategory]);
+    return [...productsLabeled.filter((p) => p.category === selectedCategory)].sort(byDisplayOnly);
+  }, [productsLabeled, selectedCategory, categorySequenceById]);
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) return currentProducts;
@@ -346,19 +809,10 @@ export default function App() {
     return u && u.length > 0 ? u : null;
   }, [selectedStore]);
 
-  // ── Header title — сонгосон дэлгүүр (stores.name), эсвэл брэндийн store mapping ──
-  const headerTitle = useMemo(
-    () => selectedStore?.name || (BRAND_TO_STORE[selectedBrand] ?? selectedBrand),
-    [selectedStore, selectedBrand],
-  );
+  const headerTitle = useMemo(() => selectedStore?.name ?? '', [selectedStore]);
 
-  const handleBrandChange = (brand: string) => {
-    // Guard: block cross-store navigation when cart is locked
-    if (activeCartStore && (BRAND_TO_STORE[brand] ?? '') !== activeCartStore) {
-      fireLockedToast();
-      return;
-    }
-    setSelectedBrand(brand);
+  const handleBrandChange = (brandId: string) => {
+    setSelectedBrandId(brandId);
     setSelectedCategory('Бүх бараа');
     setSearchQuery('');
   };
@@ -423,6 +877,7 @@ export default function App() {
         onHistoryClick={handleOpenHistory}
         onGuestOrdersClick={() => setIsGuestOrdersOpen(true)}
         isLoggedIn={isLoggedIn}
+        loggedInUserLabel={loggedInUserLabel}
         cartCount={cartCount}
         searchValue={searchQuery}
         onSearchChange={setSearchQuery}
@@ -435,10 +890,10 @@ export default function App() {
 
       {/* ── Content filters (all breakpoints) ────────────────────────────── */}
       <BrandFilter
-        brands={visibleBrandNames}
-        activeBrand={selectedBrand}
+        brands={brandChipOptions}
+        activeBrandId={selectedBrandId || null}
         onBrandChange={handleBrandChange}
-        lockedStore={activeCartStore}
+        lockedStore={cartItems.length > 0 ? lockedStoreDisplayName : null}
         onBlockedClick={fireLockedToast}
       />
       <CategoryTabs
@@ -491,9 +946,9 @@ export default function App() {
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
         onClearCart={() => {
-          // Clear cart data
           setCartItems([]);
-          setActiveCartStore(null);
+          setActiveCartStoreId(null);
+          setLockedStoreDisplayName(null);
           // Close every page/modal so the user lands on Home
           setIsCartOpen(false);
           setIsProfileOpen(false);
@@ -526,6 +981,7 @@ export default function App() {
         onApplicationClick={handleOpenApplication}
         onMyOrdersClick={handleOpenMyOrders}
         onHistoryClick={handleOpenHistory}
+        loggedInUserLabel={loggedInUserLabel}
       />
       <ProfilePage
         isOpen={isProfileOpen}
@@ -543,7 +999,7 @@ export default function App() {
         isOpen={parentProduct !== null}
         onClose={() => setParentProduct(null)}
         onAddItems={handleAddChildItems}
-        brandName={selectedBrand}
+        brandName={activeBrandDisplayName}
       />
       <MyOrdersPage
         isOpen={isMyOrdersOpen}

@@ -30,6 +30,8 @@ interface HeaderProps {
   onHistoryClick?:       () => void;
   onGuestOrdersClick?:   () => void;   // ← guest "Захиалга" button
   isLoggedIn?:           boolean;
+  /** Нэвтэрсэн хэрэглэгчийн утас (байхгүй бол «Хэрэглэгч») */
+  loggedInUserLabel?:    string | null;
   cartCount?:            number;
   searchValue?:          string;
   onSearchChange?:       (q: string) => void;
@@ -140,6 +142,7 @@ export function Header({
   onHistoryClick,
   onGuestOrdersClick,
   isLoggedIn  = false,
+  loggedInUserLabel = null,
   cartCount   = 0,
   searchValue = '',
   onSearchChange,
@@ -422,7 +425,9 @@ export function Header({
                 >
                   <div className="px-4 pt-4 pb-3">
                     <p className="text-[10px] text-gray-400 leading-none mb-0.5">Сайн уу,</p>
-                    <p className="text-sm font-semibold text-gray-900 leading-snug">Хэрэглэгч</p>
+                    <p className="text-sm font-semibold text-gray-900 leading-snug">
+                      {loggedInUserLabel?.trim() || 'Хэрэглэгч'}
+                    </p>
                   </div>
                   <div className="h-px bg-gray-100 mx-3" />
                   <div className="px-2 py-2">

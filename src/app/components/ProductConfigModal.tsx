@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { X, Plus, Minus, ShoppingCart, Ruler, Maximize2, Palette, FileText, AlertCircle } from 'lucide-react';
-import { Product, CartItem, CartItemConfig } from '../types';
+import { X, Plus, Minus, ShoppingCart, Ruler, Maximize2, Palette, FileText } from 'lucide-react';
+import { Product, ProductType, CartItem, CartItemConfig } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { getBasePrice, calculateTotal } from '../utils/priceCalc';
 import { ProductGallery } from './ProductGallery';
+import { ProductManualSheet } from './ProductManualSheet';
 
 interface ProductConfigModalProps {
   product: Product | null;
@@ -142,8 +143,7 @@ export function ProductConfigModal({
   const heightInputRef = useRef<HTMLInputElement>(null);
   const lengthInputRef = useRef<HTMLInputElement>(null);
 
-  // ── "Заавар үзэх" fallback inside modal ─────────────────────────────────
-  const [showManualFallback, setShowManualFallback] = useState(false);
+  const [isManualSheetOpen, setIsManualSheetOpen] = useState(false);
 
   // ── Gallery state ──────────────────────────────────────────────────────
   const [isGalleryOpen,  setIsGalleryOpen]  = useState(false);
@@ -158,7 +158,18 @@ export function ProductConfigModal({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
-  const type = product?.productType ?? 1;
+  const type: ProductType = product?.is_coded_paint === true
+    ? 4
+    : product?.is_foam_range === true
+      ? 3
+      : product?.is_calculate_length === true
+        ? 2
+        : 1;
+
+  const productForPricing = useMemo((): Product | null => {
+    if (!product) return null;
+    return { ...product, productType: type };
+  }, [product, type]);
 
   // Derive image list — always at least the primary imageUrl
   const productImages = product
@@ -175,15 +186,21 @@ export function ProductConfigModal({
       setQuantity(1);
       setLength(''); setHeight(''); setWidth(''); setColorCode('');
       setErrors({}); setTouched({});
-      setShowManualFallback(false);
+      setIsManualSheetOpen(false);
       setGalleryIndex(0);
       setGalleryImages([]);
       setChildQtys({});
-      // Auto-focus the primary dimension input after animation completes
-      const productType = product?.productType ?? 1;
+      const eff =
+        product?.is_coded_paint === true
+          ? 4
+          : product?.is_foam_range === true
+            ? 3
+            : product?.is_calculate_length === true
+              ? 2
+              : 1;
       const focusTimer = setTimeout(() => {
-        if (productType === 2) lengthInputRef.current?.focus();
-        else if (productType === 3) heightInputRef.current?.focus();
+        if (eff === 2) lengthInputRef.current?.focus();
+        else if (eff === 3) heightInputRef.current?.focus();
       }, 420);
       return () => clearTimeout(focusTimer);
     } else {
@@ -248,15 +265,15 @@ export function ProductConfigModal({
 
   // ── Live parent price ──────────────────────────────────────────────────
   const liveTotal = useMemo(() => {
-    if (!product) return 0;
+    if (!productForPricing) return 0;
     const config: CartItemConfig = {
       length:    length    ? parseFloat(length)    : undefined,
       height:    height    ? parseFloat(height)    : undefined,
       width:     width     ? parseFloat(width)     : undefined,
       colorCode: colorCode || undefined,
     };
-    return calculateTotal(product, config, quantity);
-  }, [product, length, height, width, colorCode, quantity]);
+    return calculateTotal(productForPricing, config, quantity);
+  }, [productForPricing, length, height, width, colorCode, quantity]);
 
   // ── Child subtotal — Σ (child qty × child price) for selected rows ───────
   const childTotal = useMemo(
@@ -274,14 +291,9 @@ export function ProductConfigModal({
     [hasChildSelection, liveTotal, childTotal],
   );
 
-  // ── "Заавар үзэх" handler ────────────────────────────────────────────────
-  function handleManual() {
-    if (product?.manualUrl) {
-      window.open(product.manualUrl, '_blank', 'noopener,noreferrer');
-    } else {
-      setShowManualFallback(true);
-      setTimeout(() => setShowManualFallback(false), 2500);
-    }
+  function handleOpenManual() {
+    const u = product?.manualUrl?.trim();
+    if (u) setIsManualSheetOpen(true);
   }
 
   // ── Submit ──────────────────────────────────────────────────────────────
@@ -293,6 +305,8 @@ export function ProductConfigModal({
 
     if (!isValid || !product) return;
 
+    const productForCart: Product = { ...product, productType: type };
+
     // ── 1. Always add the parent item ──────────────────────────────────────
     const config: CartItemConfig = {
       length:    length    ? parseFloat(length)    : undefined,
@@ -302,7 +316,7 @@ export function ProductConfigModal({
     };
     onConfirm({
       cartItemId: `${product.id}-${Date.now()}`,
-      product,
+      product: productForCart,
       quantity,
       config,
       totalPrice: liveTotal,
@@ -341,6 +355,8 @@ export function ProductConfigModal({
   if (!mounted || !product) return null;
 
   const basePrice = getBasePrice(product);
+  const manualHref = product.manualUrl?.trim() ?? '';
+  const hasManual = manualHref.length > 0;
 
   return (
     <div className="fixed inset-0 z-[130] flex items-end justify-center">
@@ -560,30 +576,26 @@ export function ProductConfigModal({
             </p>
           </div>
 
-          {/* "Заавар үзэх" link */}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleManual}
-              className="flex items-center gap-1.5 text-xs font-medium text-blue-500 hover:text-blue-700 transition-colors active:opacity-70"
-            >
-              <FileText className="w-3.5 h-3.5" />
-              Заавар үзэх
-            </button>
-            {showManualFallback && (
-              <span className="flex items-center gap-1 text-xs text-amber-600">
-                <AlertCircle className="w-3 h-3 shrink-0" />
-                Заава байхгүй байна
-              </span>
-            )}
-          </div>
+          {/* Заавар — нийт үнийн доор, сагсны товчийн дээр, зүүн талд холбоос хэлбэр */}
+          {hasManual && (
+            <div className="flex justify-start -mt-0.5">
+              <button
+                type="button"
+                onClick={handleOpenManual}
+                className="flex items-center gap-1.5 min-h-[44px] -my-1 py-2 pr-3 text-xs font-medium text-blue-500 hover:text-blue-700 active:opacity-70 transition-colors touch-manipulation text-left rounded-lg"
+              >
+                <FileText className="w-3.5 h-3.5 shrink-0" />
+                Заавар үзэх
+              </button>
+            </div>
+          )}
 
           {/* ── Child variant selection (isParent products only) ─────────── */}
           {product.isParent && product.children && product.children.length > 0 && (
             <div className="border border-indigo-100 rounded-xl bg-indigo-50/30 p-3 space-y-2">
               {/* Section title — RENAMED */}
               <p className="text-xs font-semibold text-gray-700">
-                Нэмэлт авах бараа
+                Нэмэлт бараа авах
               </p>
 
               {/* Child rows — max 4 */}
@@ -731,13 +743,22 @@ export function ProductConfigModal({
         </div>
       </div>
 
-      {/* ── Full-screen gallery — z-[150] sits above this modal's z-[130] ── */}
+      {/* ── ProductGallery — body portal, z-[220] ── */}
       <ProductGallery
         images={galleryImages}
         initialIndex={galleryIndex}
         isOpen={isGalleryOpen}
         onClose={() => setIsGalleryOpen(false)}
       />
+
+      {hasManual && (
+        <ProductManualSheet
+          isOpen={isManualSheetOpen}
+          onClose={() => setIsManualSheetOpen(false)}
+          url={manualHref}
+          productName={product.name}
+        />
+      )}
     </div>
   );
 }

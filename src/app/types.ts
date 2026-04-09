@@ -8,7 +8,7 @@ export type ProductType = 1 | 2 | 3 | 4;
 // ─── Child Product ────────────────────────────────────────────────────────────
 // Simplified product variant under a parent product.
 export interface ChildProduct {
-  id: number;
+  id: number | string;
   name: string;
   stock: number;
   price: number;
@@ -17,23 +17,36 @@ export interface ChildProduct {
 }
 
 export interface Product {
-  id: number;
+  id: number | string;
   store_id?: string;   // UUID from stores table in Supabase
+  /** categories.id — UI-д category_name-ээр солигдоно */
+  categoryId?: string;
+  /** «Бүх бараа» эрэмбэ: categories.sequence_number-ийн дараа products.display_order */
+  displayOrder?: number;
   name: string;
   category: string;
   price: number;       // display / original price (kept for backward compat)
   basePrice?: number;  // unit price used for calculations; falls back to price
   oldPrice?: number;
+  /** Нийт хөнгөлөлтийн хувь (барааны discount + брэндийн online_discount_percent) */
   discount?: number;
   stock: number;
   imageCount?: number;
   imageUrl: string;
   images?: string[];
+  /** products.product_manual — заавар (ихэнхдээ PDF URL) */
   manualUrl?: string;
   productType?: ProductType; // defaults to 1 when absent
+  /** true бол захиалгын модалд өнгийн кодын форм (productType 4-тэй ижил) */
+  is_coded_paint?: boolean;
+  /** true бол өндөр/өргөн (productType 3-тай ижил) */
+  is_foam_range?: boolean;
+  /** true бол урт (productType 2-той ижил) */
+  is_calculate_length?: boolean;
   // ── Parent product fields ─────────────────────────────────────────────────
-  isParent?: boolean;          // when true → opens ChildSelectionModal
-  children?: ChildProduct[];   // max 4 children displayed
+  /** related_product_* эсвэл children — ProductConfigModal-д «Нэмэлт бараа авах» */
+  isParent?: boolean;
+  children?: ChildProduct[];
 }
 
 // ─── Cart Config ──────────────────────────────────────────────────────────────

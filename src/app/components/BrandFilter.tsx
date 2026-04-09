@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react';
 import { ShoppingCart } from 'lucide-react';
 
+export interface BrandChipOption {
+  id:        string;
+  brandName: string;
+}
+
 interface BrandFilterProps {
-  brands:          string[];   // already filtered by App — only visible brands
-  activeBrand:     string;
-  onBrandChange:   (brand: string) => void;
+  brands:          BrandChipOption[];
+  activeBrandId:   string | null;
+  onBrandChange:   (brandId: string) => void;
   lockedStore?:    string | null;
-  onBlockedClick?: () => void; // called when user somehow clicks a locked brand
+  onBlockedClick?: () => void;
 }
 
 export function BrandFilter({
   brands,
-  activeBrand,
+  activeBrandId,
   onBrandChange,
   lockedStore,
   onBlockedClick,
@@ -63,18 +68,19 @@ export function BrandFilter({
       {/* ── Brand chips ────────────────────────────────────────────────── */}
       <div className="max-w-[1280px] mx-auto px-4 md:px-6 lg:px-8 py-3 overflow-x-auto scrollbar-hide">
         <div className="flex gap-2 min-w-max">
-          {brands.map((brand) => (
+          {brands.map((b) => (
             <button
-              key={brand}
-              onClick={() => onBrandChange(brand)}
+              key={b.id}
+              type="button"
+              onClick={() => onBrandChange(b.id)}
               className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap
                           transition-all duration-150
-                          ${activeBrand === brand
+                          ${activeBrandId === b.id
                             ? 'bg-blue-600 text-white'
                             : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                           }`}
             >
-              {brand}
+              {b.brandName}
             </button>
           ))}
         </div>
