@@ -1,13 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { X, Eye, EyeOff, Phone, Lock, AlertCircle, Loader2 } from 'lucide-react';
-import { verifyCustomerLogin, formatCustomerPhoneDisplay } from '../lib/customersRegister';
+import {
+  verifyCustomerLogin,
+  verifyGoogleCustomerLogin,
+  formatCustomerPhoneDisplay,
+} from '../lib/customersRegister';
+import { loadGoogleIdentityScript, requestGoogleUserSub } from '../lib/googleIdentity';
 
 interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRegisterClick: () => void;
-  /** Амжилттай нэвтрэлт — утасны нэвтрэлтэд `phone` (баазын түлхүүр), Google зэрэгт зөвхөн `phoneDisplay` */
-  onLoginSuccess?: (ctx: { phoneDisplay: string; phone?: number }) => void;
+  /**
+   * Утасны нэвтрэлт: `phone` + `phoneDisplay`.
+   * Google: `googleId` (OAuth `sub` эсвэл `VITE_DEV_GOOGLE_LOGIN_SUB`) + `phoneDisplay` (жишээ нь нэр).
+   */
+  onLoginSuccess?: (ctx: { phoneDisplay: string; phone?: number; googleId?: string }) => void;
   onForgotClick?: () => void;
 }
 
@@ -102,10 +110,34 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
 
   async function handleGoogle() {
     setGoogleLoading(true);
+    setErrors({});
     try {
-      await new Promise((res) => setTimeout(res, 1000));
-      onLoginSuccess?.({ phoneDisplay: '' });
+      const clientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim();
+      if (clientId) {
+        await loadGoogleIdentityScript();
+        const googleId = await requestGoogleUserSub(clientId);
+        await verifyGoogleCustomerLogin(googleId);
+        onLoginSuccess?.({ phoneDisplay: 'Google', googleId });
+        onClose();
+        return;
+      }
+
+      const fromEnv = (import.meta.env.VITE_DEV_GOOGLE_LOGIN_SUB as string | undefined)?.trim();
+      const googleId =
+        fromEnv ||
+        (import.meta.env.DEV ? 'dev-google-customer' : '');
+      if (!googleId) {
+        setErrors({
+          general:
+            'Google OAuth тохируулаагүй байна. Төсөлийн үндсэн хавтсанд .env файл үүсгээд VITE_GOOGLE_CLIENT_ID=... бичнэ үү (RegisterModal-тай ижил). DEV-д түр зуурын туршилт: VITE_DEV_GOOGLE_LOGIN_SUB эсвэл dev-google-customer мөр баазад.',
+        });
+        return;
+      }
+      await verifyGoogleCustomerLogin(googleId);
+      onLoginSuccess?.({ phoneDisplay: 'Google', googleId });
       onClose();
+    } catch (err: unknown) {
+      setErrors({ general: err instanceof Error ? err.message : 'Google нэвтрэхэд алдаа гарлаа.' });
     } finally {
       setGoogleLoading(false);
     }

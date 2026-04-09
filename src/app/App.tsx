@@ -615,13 +615,22 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   /** Нэвтрэхэд утасны дугаар (хоосон бол «Хэрэглэгч») */
   const [loggedInUserLabel, setLoggedInUserLabel] = useState<string | null>(null);
-  /** Профайл REST: customers.phone (зөвхөн утас + нууц үгээр нэвтэрсэн үед) */
+  /** Профайл REST: customers.phone (утас + нууц үг) */
   const [loggedInUserPhone, setLoggedInUserPhone] = useState<number | null>(null);
+  /** Профайл REST: customers.google_id */
+  const [loggedInUserGoogleId, setLoggedInUserGoogleId] = useState<string | null>(null);
 
-  function handleLoginSuccess(ctx?: { phoneDisplay: string; phone?: number }) {
+  function handleLoginSuccess(ctx?: { phoneDisplay: string; phone?: number; googleId?: string }) {
     setIsLoggedIn(true);
     const t = ctx?.phoneDisplay?.trim() ?? '';
     setLoggedInUserLabel(t.length > 0 ? t : null);
+    const gid = ctx?.googleId?.trim() ?? '';
+    if (gid) {
+      setLoggedInUserGoogleId(gid);
+      setLoggedInUserPhone(null);
+      return;
+    }
+    setLoggedInUserGoogleId(null);
     const p = ctx?.phone;
     setLoggedInUserPhone(
       p != null && Number.isFinite(p) && Number.isInteger(p) && p > 0 ? p : null,
@@ -631,6 +640,7 @@ export default function App() {
     setIsLoggedIn(false);
     setLoggedInUserLabel(null);
     setLoggedInUserPhone(null);
+    setLoggedInUserGoogleId(null);
   }
 
   function handleOpenProfile() {
@@ -883,7 +893,6 @@ export default function App() {
         onMyOrdersClick={handleOpenMyOrders}
         onHistoryClick={handleOpenHistory}
         onGuestOrdersClick={() => setIsGuestOrdersOpen(true)}
-        onOpenUserMenu={() => setIsUserMenuOpen(true)}
         isLoggedIn={isLoggedIn}
         loggedInUserLabel={loggedInUserLabel}
         cartCount={cartCount}
@@ -921,7 +930,7 @@ export default function App() {
         onCarClick={() => setIsCarModalOpen(true)}
         onJobsClick={() => setIsJobsOpen(true)}
         onCartClick={() => setIsCartOpen(true)}
-        onProfileClick={handleOpenProfile}
+        onProfileClick={() => setIsUserMenuOpen(true)}
         onOrdersClick={() => setIsGuestOrdersOpen(true)}
         isLoggedIn={isLoggedIn}
         cartCount={cartCount}
@@ -996,6 +1005,7 @@ export default function App() {
         onClose={() => setIsProfileOpen(false)}
         onSaveSuccess={handleProfileSaveSuccess}
         customerPhone={loggedInUserPhone}
+        customerGoogleId={loggedInUserGoogleId}
       />
       <ProductConfigModal
         product={configProduct}

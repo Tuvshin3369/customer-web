@@ -5,23 +5,23 @@ import {
 } from 'lucide-react';
 import {
   fetchCustomerProfileByPhone,
+  fetchCustomerProfileByGoogleId,
   updateCustomerProfileByPhone,
+  updateCustomerProfileByGoogleId,
   formatCustomerPhoneDisplay,
   type CustomerProfileSnapshot,
 } from '../lib/customersRegister';
 
-// ── Save-state machine ───────────────────────────────────────────────────────
 type SaveState = 'idle' | 'loading' | 'success';
 
 interface ProfilePageProps {
-  isOpen:         boolean;
-  onClose:        () => void;
-  onSaveSuccess?: () => void;
-  /** Утас + нууц үгээр нэвтэрсэн үед — баазын customers.phone */
-  customerPhone:   number | null;
+  isOpen:           boolean;
+  onClose:          () => void;
+  onSaveSuccess?:   () => void;
+  customerPhone:    number | null;
+  customerGoogleId: string | null;
 }
 
-// ── Toast ────────────────────────────────────────────────────────────────────
 function ProfileToast({ visible }: { visible: boolean }) {
   return (
     <div
@@ -41,7 +41,6 @@ function ProfileToast({ visible }: { visible: boolean }) {
   );
 }
 
-// ── Reusable field wrappers ──────────────────────────────────────────────────
 function FieldLabel({ children, hint }: { children: React.ReactNode; hint?: string }) {
   return (
     <div className="mb-1.5">
@@ -128,8 +127,13 @@ function SaveButton({ saveState, btnScale, disabled, onClick }: SaveButtonProps)
   );
 }
 
-// ── Main component ───────────────────────────────────────────────────────────
-export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: ProfilePageProps) {
+export function ProfilePage({
+  isOpen,
+  onClose,
+  onSaveSuccess,
+  customerPhone,
+  customerGoogleId,
+}: ProfilePageProps) {
   const [mounted,   setMounted]   = useState(false);
   const [visible,   setVisible]   = useState(false);
   const [saveState, setSaveState] = useState<SaveState>('idle');
@@ -152,28 +156,42 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
   const [showNewPwd,      setShowNewPwd]      = useState(false);
   const [showConfirmPwd,  setShowConfirmPwd]  = useState(false);
 
-  const headerTitle =
-    customerPhone != null
+  const googleIdTrim = customerGoogleId?.trim() ?? '';
+  const isGoogleProfile = googleIdTrim.length > 0;
+  const hasProfileKey = isGoogleProfile || customerPhone != null;
+
+  const headerTitle = isGoogleProfile
+    ? 'Миний профайл'
+    : customerPhone != null
       ? `Миний профайл ${formatCustomerPhoneDisplay(customerPhone)}`
       : 'Миний профайл';
 
   const dirty = useMemo(() => {
-    if (baseline === null || customerPhone == null) return false;
+    if (baseline === null || !hasProfileKey) return false;
     const addDigits = extraPhone.replace(/\D/g, '').slice(0, 8);
     const baseAdd = baseline.additional_phone.replace(/\D/g, '').slice(0, 8);
     if (addDigits !== baseAdd) return true;
     if (orgName.trim() !== baseline.organization_name) return true;
     if (register.trim().toUpperCase() !== baseline.register) return true;
-    if (newPassword.trim() !== '' || confirmPassword.trim() !== '') return true;
+    if (!isGoogleProfile && (newPassword.trim() !== '' || confirmPassword.trim() !== '')) return true;
     return false;
-  }, [baseline, customerPhone, extraPhone, orgName, register, newPassword, confirmPassword]);
+  }, [
+    baseline,
+    hasProfileKey,
+    isGoogleProfile,
+    extraPhone,
+    orgName,
+    register,
+    newPassword,
+    confirmPassword,
+  ]);
 
   const canSave =
     dirty &&
     saveState === 'idle' &&
     !isLoadingProfile &&
     baseline !== null &&
-    customerPhone != null;
+    hasProfileKey;
 
   useEffect(() => {
     if (isOpen) {
@@ -193,7 +211,8 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
 
   useEffect(() => {
     if (!isOpen) return;
-    if (customerPhone == null) {
+
+    if (!hasProfileKey) {
       setBaseline(null);
       setLoadError(null);
       setIsLoadingProfile(false);
@@ -209,7 +228,11 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
     setIsLoadingProfile(true);
     setLoadError(null);
 
-    fetchCustomerProfileByPhone(customerPhone)
+    const load = isGoogleProfile
+      ? fetchCustomerProfileByGoogleId(googleIdTrim)
+      : fetchCustomerProfileByPhone(customerPhone as number);
+
+    load
       .then((snap) => {
         if (cancelled) return;
         const add8 = snap.additional_phone.replace(/\D/g, '').slice(0, 8);
@@ -234,7 +257,7 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
       });
 
     return () => { cancelled = true; };
-  }, [isOpen, customerPhone]);
+  }, [isOpen, hasProfileKey, isGoogleProfile, googleIdTrim, customerPhone]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -253,32 +276,46 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
   }, [isOpen]);
 
   async function handleSave() {
-    if (!canSave || customerPhone == null || baseline === null) return;
+    if (!canSave || baseline === null || !hasProfileKey) return;
 
-    const pwd = newPassword.trim();
-    const cpwd = confirmPassword.trim();
-    if (pwd !== '' || cpwd !== '') {
-      if (pwd !== cpwd) {
-        setFormErrors({ password: 'Нууц үг таарахгүй байна.' });
-        return;
-      }
-      if (pwd.length < 6) {
-        setFormErrors({ password: 'Нууц үг хамгийн багадаа 6 тэмдэгт байна.' });
-        return;
+    if (!isGoogleProfile) {
+      const pwd = newPassword.trim();
+      const cpwd = confirmPassword.trim();
+      if (pwd !== '' || cpwd !== '') {
+        if (pwd !== cpwd) {
+          setFormErrors({ password: 'Нууц үг таарахгүй байна.' });
+          return;
+        }
+        if (pwd.length < 6) {
+          setFormErrors({ password: 'Нууц үг хамгийн багадаа 6 тэмдэгт байна.' });
+          return;
+        }
       }
     }
+
     setFormErrors({});
     setSaveState('loading');
 
     try {
-      await updateCustomerProfileByPhone({
-        phone: customerPhone,
-        baseline,
-        additional_phone: extraPhone,
-        organization_name: orgName,
-        register,
-        newPassword: pwd === '' ? undefined : pwd,
-      });
+      if (isGoogleProfile) {
+        await updateCustomerProfileByGoogleId({
+          googleId: googleIdTrim,
+          baseline,
+          additional_phone: extraPhone,
+          organization_name: orgName,
+          register,
+        });
+      } else {
+        const pwd = newPassword.trim();
+        await updateCustomerProfileByPhone({
+          phone: customerPhone as number,
+          baseline,
+          additional_phone: extraPhone,
+          organization_name: orgName,
+          register,
+          newPassword: pwd === '' ? undefined : pwd,
+        });
+      }
 
       const addDigits = extraPhone.replace(/\D/g, '').slice(0, 8);
       const nextBaseline: CustomerProfileSnapshot = {
@@ -305,6 +342,8 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
       setFormErrors({ general: e instanceof Error ? e.message : 'Хадгалахад алдаа гарлаа.' });
     }
   }
+
+  const showFormBody = hasProfileKey && baseline !== null && !isLoadingProfile;
 
   if (!mounted) return null;
 
@@ -337,21 +376,20 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
         <ProfileToast visible={showToast} />
 
         <div className="max-w-[640px] mx-auto px-4 pt-5 space-y-4">
-          {customerPhone == null && (
+          {!hasProfileKey && (
             <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Профайлын мэдээллийг ачаалахын тулд утасны дугаар + нууц үгээр нэвтэрнэ үү. (Google-ээр нэвтэрсэн
-              тохиолдолд одоогоор энэ хуудас ажиллахгүй.)
+              Профайлын мэдээлэл ачаалагдахгүй байна. Дахин нэвтэрнэ үү.
             </div>
           )}
 
-          {customerPhone != null && isLoadingProfile && (
+          {hasProfileKey && isLoadingProfile && (
             <div className="flex flex-col items-center justify-center py-16 gap-3 text-gray-500">
               <Loader2 className="w-8 h-8 animate-spin" />
               <p className="text-sm">Ачаалж байна…</p>
             </div>
           )}
 
-          {customerPhone != null && loadError && !isLoadingProfile && (
+          {hasProfileKey && loadError && !isLoadingProfile && (
             <div className="flex items-start gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
               <span>{loadError}</span>
@@ -365,7 +403,7 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
             </div>
           )}
 
-          {customerPhone != null && baseline !== null && !isLoadingProfile && (
+          {showFormBody && (
             <>
               <SectionCard title="Хувийн мэдээлэл">
                 <div>
@@ -419,66 +457,68 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
                 </div>
               </SectionCard>
 
-              <SectionCard title="Нууц үг">
-                {formErrors.password && (
-                  <p className="text-xs text-red-600 -mt-1 mb-1">{formErrors.password}</p>
-                )}
-                <div>
-                  <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
-                    Шинэ нууц үг
-                  </FieldLabel>
-                  <InputRow icon={<Lock className="w-4 h-4" />}>
-                    <input
-                      type={showNewPwd ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      autoComplete="new-password"
-                      value={newPassword}
-                      onChange={(e) => {
-                        setNewPassword(e.target.value);
-                        setFormErrors({});
-                      }}
-                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowNewPwd((v) => !v)}
-                      className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
-                      tabIndex={-1}
-                      aria-label={showNewPwd ? 'Нуух' : 'Харуулах'}
-                    >
-                      {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </InputRow>
-                </div>
+              {!isGoogleProfile && (
+                <SectionCard title="Нууц үг">
+                  {formErrors.password && (
+                    <p className="text-xs text-red-600 -mt-1 mb-1">{formErrors.password}</p>
+                  )}
+                  <div>
+                    <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
+                      Шинэ нууц үг
+                    </FieldLabel>
+                    <InputRow icon={<Lock className="w-4 h-4" />}>
+                      <input
+                        type={showNewPwd ? 'text' : 'password'}
+                        placeholder="••••••••"
+                        autoComplete="new-password"
+                        value={newPassword}
+                        onChange={(e) => {
+                          setNewPassword(e.target.value);
+                          setFormErrors({});
+                        }}
+                        className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowNewPwd((v) => !v)}
+                        className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+                        tabIndex={-1}
+                        aria-label={showNewPwd ? 'Нуух' : 'Харуулах'}
+                      >
+                        {showNewPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </InputRow>
+                  </div>
 
-                <div>
-                  <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
-                    Нууц үг давтах
-                  </FieldLabel>
-                  <InputRow icon={<Lock className="w-4 h-4" />}>
-                    <input
-                      type={showConfirmPwd ? 'text' : 'password'}
-                      placeholder="••••••••"
-                      autoComplete="new-password"
-                      value={confirmPassword}
-                      onChange={(e) => {
-                        setConfirmPassword(e.target.value);
-                        setFormErrors({});
-                      }}
-                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowConfirmPwd((v) => !v)}
-                      className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
-                      tabIndex={-1}
-                      aria-label={showConfirmPwd ? 'Нуух' : 'Харуулах'}
-                    >
-                      {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </InputRow>
-                </div>
-              </SectionCard>
+                  <div>
+                    <FieldLabel hint="Хэрэв солихгүй бол хоосон үлдээнэ үү">
+                      Нууц үг давтах
+                    </FieldLabel>
+                    <InputRow icon={<Lock className="w-4 h-4" />}>
+                      <input
+                        type={showConfirmPwd ? 'text' : 'password'}
+                        placeholder="••••••••"
+                        autoComplete="new-password"
+                        value={confirmPassword}
+                        onChange={(e) => {
+                          setConfirmPassword(e.target.value);
+                          setFormErrors({});
+                        }}
+                        className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowConfirmPwd((v) => !v)}
+                        className="shrink-0 text-gray-400 hover:text-gray-600 transition-colors"
+                        tabIndex={-1}
+                        aria-label={showConfirmPwd ? 'Нуух' : 'Харуулах'}
+                      >
+                        {showConfirmPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </InputRow>
+                  </div>
+                </SectionCard>
+              )}
 
               <div className="hidden md:block pt-1 pb-6">
                 <SaveButton
@@ -493,7 +533,7 @@ export function ProfilePage({ isOpen, onClose, onSaveSuccess, customerPhone }: P
         </div>
       </div>
 
-      {customerPhone != null && baseline !== null && !isLoadingProfile && (
+      {showFormBody && (
         <div className="md:hidden shrink-0 bg-white border-t border-gray-100 px-4 py-3 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
           <div className="max-w-[640px] mx-auto">
             <SaveButton

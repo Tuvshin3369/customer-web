@@ -236,6 +236,14 @@ function normAdditionalPhoneFromDb(v: unknown): string {
   return String(v).replace(/\D/g, '').slice(0, 16);
 }
 
+function mapRowToProfileSnapshot(row: Record<string, unknown>): CustomerProfileSnapshot {
+  return {
+    additional_phone: normAdditionalPhoneFromDb(row.additional_phone),
+    organization_name: normDbText(row.organization_name),
+    register: normDbText(row.register).toUpperCase(),
+  };
+}
+
 /** `customers.phone`-аар нэмэлт утас, байгууллага, регистрийг уншина (password_hash авахгүй). */
 export async function fetchCustomerProfileByPhone(phone: number): Promise<CustomerProfileSnapshot> {
   const { restBase, anonKey } = getSupabaseRest();
@@ -254,12 +262,116 @@ export async function fetchCustomerProfileByPhone(phone: number): Promise<Custom
   if (!Array.isArray(json) || json.length === 0) {
     throw new Error('Хэрэглэгчийн мэдээлэл олдсонгүй.');
   }
-  const row = json[0] as Record<string, unknown>;
-  return {
-    additional_phone: normAdditionalPhoneFromDb(row.additional_phone),
-    organization_name: normDbText(row.organization_name),
-    register: normDbText(row.register).toUpperCase(),
-  };
+  return mapRowToProfileSnapshot(json[0] as Record<string, unknown>);
+}
+
+/** `customers.google_id`-аар ижил талбаруудыг уншина. */
+export async function fetchCustomerProfileByGoogleId(googleId: string): Promise<CustomerProfileSnapshot> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const id = googleId.trim();
+  if (!id) throw new Error('Google ID олдсонгүй.');
+  const q = new URLSearchParams({
+    select: 'additional_phone,organization_name,register',
+    google_id: `eq.${id}`,
+    limit: '1',
+  });
+  const res = await fetch(`${restBase}/rest/v1/customers?${q.toString()}`, {
+    headers: restHeaders(anonKey),
+  });
+  const json = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(formatPostgrestError(json, res) || 'Мэдээлэл ачаалахад алдаа гарлаа.');
+  }
+  if (!Array.isArray(json) || json.length === 0) {
+    throw new Error('Хэрэглэгчийн мэдээлэл олдсонгүй.');
+  }
+  return mapRowToProfileSnapshot(json[0] as Record<string, unknown>);
+}
+
+/** Google-ээр нэвтрэхээс өмнө мөр байгаа эсэхийг шалгана (stub / ирээдүйн OAuth-д `sub`). */
+export async function verifyGoogleCustomerLogin(googleId: string): Promise<void> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const id = googleId.trim();
+  if (!id) throw new Error('Google ID олдсонгүй.');
+  const ok = await customerExistsByGoogleId(restBase, anonKey, id);
+  if (!ok) {
+    throw new Error('Энэ Google дансаар бүртгэл байхгүй байна. Эхлээд бүртгүүлнэ үү.');
+  }
+}
+
+function buildProfileFieldsPatch(
+  baseline: CustomerProfileSnapshot,
+  additional_phone: string,
+  organization_name: string,
+  register: string,
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  const addDigits = additional_phone.replace(/\D/g, '').slice(0, 16);
+  const baseAdd = baseline.additional_phone.replace(/\D/g, '').slice(0, 16);
+  if (addDigits !== baseAdd) {
+    if (addDigits === '') {
+      patch.additional_phone = null;
+    } else {
+      const n = Number(addDigits);
+      patch.additional_phone =
+        Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER
+          ? n
+          : addDigits;
+    }
+  }
+
+  const org = organization_name.trim();
+  if (org !== baseline.organization_name) {
+    patch.organization_name = org === '' ? null : org;
+  }
+
+  const reg = register.trim().toUpperCase();
+  if (reg !== baseline.register) {
+    patch.register = reg === '' ? null : reg;
+  }
+
+  return patch;
+}
+
+async function patchCustomerRow(
+  restBase: string,
+  anonKey: string,
+  filter: URLSearchParams,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  if (Object.keys(patch).length === 0) return;
+  const res = await fetch(`${restBase}/rest/v1/customers?${filter.toString()}`, {
+    method: 'PATCH',
+    headers: { ...restHeaders(anonKey), Prefer: 'return=minimal' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const json = await parseJsonSafely(res);
+    throw new Error(formatPostgrestError(json, res) || 'Хадгалахад алдаа гарлаа.');
+  }
+}
+
+/**
+ * Зөвхөн өөрчлөгдсөн талбаруудыг PATCH: additional_phone, organization_name, register (нууц үггүй).
+ */
+export async function updateCustomerProfileByGoogleId(params: {
+  googleId: string;
+  baseline: CustomerProfileSnapshot;
+  additional_phone: string;
+  organization_name: string;
+  register: string;
+}): Promise<void> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const id = params.googleId.trim();
+  if (!id) throw new Error('Google ID олдсонгүй.');
+  const patch = buildProfileFieldsPatch(
+    params.baseline,
+    params.additional_phone,
+    params.organization_name,
+    params.register,
+  );
+  const q = new URLSearchParams({ google_id: `eq.${id}` });
+  await patchCustomerRow(restBase, anonKey, q, patch);
 }
 
 /**
@@ -275,30 +387,12 @@ export async function updateCustomerProfileByPhone(params: {
   newPassword?: string;
 }): Promise<void> {
   const { restBase, anonKey } = getSupabaseRest();
-  const patch: Record<string, unknown> = {};
-
-  const addDigits = params.additional_phone.replace(/\D/g, '').slice(0, 16);
-  if (addDigits !== params.baseline.additional_phone) {
-    if (addDigits === '') {
-      patch.additional_phone = null;
-    } else {
-      const n = Number(addDigits);
-      patch.additional_phone =
-        Number.isFinite(n) && Number.isInteger(n) && n >= 0 && n <= Number.MAX_SAFE_INTEGER
-          ? n
-          : addDigits;
-    }
-  }
-
-  const org = params.organization_name.trim();
-  if (org !== params.baseline.organization_name) {
-    patch.organization_name = org === '' ? null : org;
-  }
-
-  const reg = params.register.trim().toUpperCase();
-  if (reg !== params.baseline.register) {
-    patch.register = reg === '' ? null : reg;
-  }
+  const patch = buildProfileFieldsPatch(
+    params.baseline,
+    params.additional_phone,
+    params.organization_name,
+    params.register,
+  );
 
   const pwd = params.newPassword?.trim() ?? '';
   if (pwd.length > 0) {
@@ -311,13 +405,5 @@ export async function updateCustomerProfileByPhone(params: {
   }
 
   const q = new URLSearchParams({ phone: `eq.${params.phone}` });
-  const res = await fetch(`${restBase}/rest/v1/customers?${q.toString()}`, {
-    method: 'PATCH',
-    headers: { ...restHeaders(anonKey), Prefer: 'return=minimal' },
-    body: JSON.stringify(patch),
-  });
-  if (!res.ok) {
-    const json = await parseJsonSafely(res);
-    throw new Error(formatPostgrestError(json, res) || 'Хадгалахад алдаа гарлаа.');
-  }
+  await patchCustomerRow(restBase, anonKey, q, patch);
 }
