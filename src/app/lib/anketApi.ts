@@ -258,6 +258,165 @@ export async function fetchJobsForAnket(): Promise<JobListItem[]> {
     .filter((j) => j.id.length > 0 && j.name.length > 0);
 }
 
+/** «Ажил» хэсэгт харуулах нэг бүртгэл (anket + anket_images). */
+export interface PublicAnketWorker {
+  id:              string;
+  name:            string;
+  phone:           string;
+  profileImage:    string | null;
+  workExperience:  string;
+  workPhotoUrls:   string[];
+  jobNames:        string[];
+}
+
+async function fetchAnketJobSummaries(): Promise<{ id: string; job_ids: string[] }[]> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const q = new URLSearchParams({ select: 'id,job_ids' });
+  const res = await fetch(`${restBase}/rest/v1/anket?${q.toString()}`, {
+    headers: restHeaders(anonKey),
+  });
+  const json = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(formatPostgrestError(json, res) || 'Анкетын жагсаалт ачаалахад алдаа гарлаа.');
+  }
+  if (!Array.isArray(json)) return [];
+  return (json as Record<string, unknown>[]).map((row) => ({
+    id:      row.id != null ? String(row.id) : '',
+    job_ids: parseJobIds(row.job_ids),
+  })).filter((r) => r.id.length > 0);
+}
+
+/**
+ * jobs.name + тухайн төрлийг сонгосон анкетуудын тоо (anket.job_ids-д uuid орсон).
+ */
+export async function fetchJobCategoriesWithWorkerCounts(): Promise<
+  { id: string; name: string; count: number }[]
+> {
+  const [jobs, summaries] = await Promise.all([fetchJobsForAnket(), fetchAnketJobSummaries()]);
+  const counts = new Map(jobs.map((j) => [j.id, 0]));
+  for (const row of summaries) {
+    for (const jid of row.job_ids) {
+      if (counts.has(jid)) counts.set(jid, (counts.get(jid) ?? 0) + 1);
+    }
+  }
+  return jobs.map((j) => ({ id: j.id, name: j.name, count: counts.get(j.id) ?? 0 }));
+}
+
+async function fetchAnketImagesGrouped(anketIds: string[]): Promise<Map<string, string[]>> {
+  const map = new Map<string, string[]>();
+  for (const id of anketIds) map.set(id, []);
+
+  if (anketIds.length === 0) return map;
+
+  const { restBase, anonKey } = getSupabaseRest();
+  const q = new URLSearchParams({
+    select:   'anket_id,image_url,created_at',
+    anket_id: `in.(${anketIds.join(',')})`,
+  });
+  const res = await fetch(`${restBase}/rest/v1/anket_images?${q.toString()}`, {
+    headers: restHeaders(anonKey),
+  });
+  const json = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(formatPostgrestError(json, res) || 'Ажлын зургууд ачаалахад алдаа гарлаа.');
+  }
+  if (!Array.isArray(json)) return map;
+
+  type Row = { anket_id?: unknown; image_url?: unknown; created_at?: unknown };
+  const buckets = new Map<string, { url: string; t: string }[]>();
+  for (const id of anketIds) buckets.set(id, []);
+
+  for (const raw of json as Row[]) {
+    const aid = raw.anket_id != null ? String(raw.anket_id) : '';
+    const url = typeof raw.image_url === 'string' ? raw.image_url.trim() : '';
+    const t =
+      typeof raw.created_at === 'string'
+        ? raw.created_at
+        : raw.created_at != null
+          ? String(raw.created_at)
+          : '';
+    if (!aid || !url) continue;
+    const b = buckets.get(aid);
+    if (b) b.push({ url, t });
+  }
+
+  for (const [aid, items] of buckets) {
+    items.sort((a, b) => a.t.localeCompare(b.t));
+    map.set(
+      aid,
+      items.map((x) => x.url),
+    );
+  }
+  return map;
+}
+
+/**
+ * Нэг ажлын төрөл (jobs.id) дээр бүртгэлтэй анкетууд: anket + anket_images.
+ * `job_ids` нь PostgreSQL uuid[] бол PostgREST `cs.{uuid}` шүүлт ажиллана.
+ */
+export async function fetchPublicWorkersByJobId(jobId: string): Promise<PublicAnketWorker[]> {
+  const jobs = await fetchJobsForAnket();
+  const jobNameById = new Map(jobs.map((j) => [j.id, j.name]));
+
+  const { restBase, anonKey } = getSupabaseRest();
+  const q = new URLSearchParams({
+    select:  'id,name,phone,profile_image,job_ids,work_experience',
+    job_ids: `cs.{${jobId}}`,
+  });
+  const res = await fetch(`${restBase}/rest/v1/anket?${q.toString()}`, {
+    headers: restHeaders(anonKey),
+  });
+  const json = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(formatPostgrestError(json, res) || 'Ажилтнууд ачаалахад алдаа гарлаа.');
+  }
+  if (!Array.isArray(json) || json.length === 0) return [];
+
+  const rows = json as Record<string, unknown>[];
+  const ids = rows.map((row) => (row.id != null ? String(row.id) : '')).filter(Boolean);
+  const imagesByAnket = await fetchAnketImagesGrouped(ids);
+
+  const workers: PublicAnketWorker[] = rows.map((row) => {
+    const id = row.id != null ? String(row.id) : '';
+    const jids = parseJobIds(row.job_ids);
+    const jobNames = jids
+      .map((jid) => jobNameById.get(jid))
+      .filter((n): n is string => Boolean(n && n.trim()));
+    return {
+      id,
+      name:
+        typeof row.name === 'string'
+          ? row.name.trim()
+          : row.name != null
+            ? String(row.name).trim()
+            : '',
+      phone:
+        typeof row.phone === 'string'
+          ? row.phone.trim()
+          : row.phone != null
+            ? String(row.phone).trim()
+            : '',
+      profileImage:
+        typeof row.profile_image === 'string'
+          ? row.profile_image.trim() || null
+          : row.profile_image != null
+            ? String(row.profile_image).trim() || null
+            : null,
+      workExperience:
+        typeof row.work_experience === 'string'
+          ? row.work_experience.trim()
+          : row.work_experience != null
+            ? String(row.work_experience).trim()
+            : '',
+      workPhotoUrls: imagesByAnket.get(id) ?? [],
+      jobNames,
+    };
+  });
+
+  workers.sort((a, b) => a.name.localeCompare(b.name, 'mn'));
+  return workers;
+}
+
 export async function fetchCustomerIdForAnket(params: {
   phone:    number | null;
   googleId: string | null;
