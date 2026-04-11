@@ -619,9 +619,17 @@ export default function App() {
   const [loggedInUserPhone, setLoggedInUserPhone] = useState<number | null>(null);
   /** Профайл REST: customers.google_id */
   const [loggedInUserGoogleId, setLoggedInUserGoogleId] = useState<string | null>(null);
+  /** `customers.is_worker` — зөвхөн true үед «Анкет» цэс */
+  const [loggedInUserIsWorker, setLoggedInUserIsWorker] = useState(false);
 
-  function handleLoginSuccess(ctx?: { phoneDisplay: string; phone?: number; googleId?: string }) {
+  function handleLoginSuccess(ctx?: {
+    phoneDisplay: string;
+    phone?: number;
+    googleId?: string;
+    isWorker?: boolean;
+  }) {
     setIsLoggedIn(true);
+    setLoggedInUserIsWorker(ctx?.isWorker === true);
     const t = ctx?.phoneDisplay?.trim() ?? '';
     setLoggedInUserLabel(t.length > 0 ? t : null);
     const gid = ctx?.googleId?.trim() ?? '';
@@ -641,6 +649,7 @@ export default function App() {
     setLoggedInUserLabel(null);
     setLoggedInUserPhone(null);
     setLoggedInUserGoogleId(null);
+    setLoggedInUserIsWorker(false);
   }
 
   function handleOpenProfile() {
@@ -659,6 +668,7 @@ export default function App() {
   }
 
   function handleOpenApplication() {
+    if (!loggedInUserIsWorker) return;
     setIsUserMenuOpen(false);
     setIsApplicationOpen(true);
   }
@@ -894,6 +904,7 @@ export default function App() {
         onHistoryClick={handleOpenHistory}
         onGuestOrdersClick={() => setIsGuestOrdersOpen(true)}
         isLoggedIn={isLoggedIn}
+        loggedInUserIsWorker={loggedInUserIsWorker}
         loggedInUserLabel={loggedInUserLabel}
         cartCount={cartCount}
         searchValue={searchQuery}
@@ -999,6 +1010,7 @@ export default function App() {
         onMyOrdersClick={handleOpenMyOrders}
         onHistoryClick={handleOpenHistory}
         loggedInUserLabel={loggedInUserLabel}
+        loggedInUserIsWorker={loggedInUserIsWorker}
       />
       <ProfilePage
         isOpen={isProfileOpen}
@@ -1044,6 +1056,8 @@ export default function App() {
       <ApplicationPage
         isOpen={isApplicationOpen}
         onClose={() => setIsApplicationOpen(false)}
+        customerPhone={loggedInUserPhone}
+        customerGoogleId={loggedInUserGoogleId}
       />
     </div>
   );

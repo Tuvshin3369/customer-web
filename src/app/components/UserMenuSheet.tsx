@@ -11,13 +11,9 @@ interface UserMenuSheetProps {
   onHistoryClick?:   () => void;  // ← new
   /** Нэвтэрсэн хэрэглэгчийн утас (байхгүй бол «Хэрэглэгч») */
   loggedInUserLabel?: string | null;
+  /** `customers.is_worker` — true бол «Анкет» харагдана */
+  loggedInUserIsWorker?: boolean;
 }
-
-const MENU_ITEMS = [
-  { icon: User,    label: 'Профайл' },
-  { icon: Package, label: 'Миний захиалга' },
-  { icon: Clock,   label: 'Худалдан авалтын түүх' },
-] as const;
 
 export function UserMenuSheet({
   isOpen,
@@ -28,6 +24,7 @@ export function UserMenuSheet({
   onMyOrdersClick,
   onHistoryClick,
   loggedInUserLabel = null,
+  loggedInUserIsWorker = false,
 }: UserMenuSheetProps) {
   const [mounted, setMounted] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -105,14 +102,15 @@ export function UserMenuSheet({
             <span className="text-sm text-gray-700">Профайл</span>
           </button>
 
-          {/* Анкет — new menu item */}
-          <button
-            onClick={() => { onApplicationClick?.(); onClose(); }}
-            className="flex items-center gap-3 w-full px-3 py-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-colors text-left"
-          >
-            <FileText className="w-4 h-4 text-gray-500 shrink-0" />
-            <span className="text-sm text-gray-700">Анкет</span>
-          </button>
+          {loggedInUserIsWorker && (
+            <button
+              onClick={() => { onApplicationClick?.(); onClose(); }}
+              className="flex items-center gap-3 w-full px-3 py-3 rounded-xl hover:bg-gray-50 active:bg-gray-100 transition-colors text-left"
+            >
+              <FileText className="w-4 h-4 text-gray-500 shrink-0" />
+              <span className="text-sm text-gray-700">Анкет</span>
+            </button>
+          )}
 
           {/* Миний захиалга */}
           <button

@@ -15,7 +15,12 @@ interface LoginModalProps {
    * Утасны нэвтрэлт: `phone` + `phoneDisplay`.
    * Google: `googleId` (OAuth `sub` эсвэл `VITE_DEV_GOOGLE_LOGIN_SUB`) + `phoneDisplay` (жишээ нь нэр).
    */
-  onLoginSuccess?: (ctx: { phoneDisplay: string; phone?: number; googleId?: string }) => void;
+  onLoginSuccess?: (ctx: {
+    phoneDisplay: string;
+    phone?: number;
+    googleId?: string;
+    isWorker?: boolean;
+  }) => void;
   onForgotClick?: () => void;
 }
 
@@ -95,10 +100,11 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
     setLoading(true);
     setErrors({});
     try {
-      const { phone: phoneNum } = await verifyCustomerLogin(phone, password);
+      const { phone: phoneNum, isWorker } = await verifyCustomerLogin(phone, password);
       onLoginSuccess?.({
         phone: phoneNum,
         phoneDisplay: formatCustomerPhoneDisplay(phoneNum),
+        isWorker,
       });
       onClose();
     } catch (err: unknown) {
@@ -116,8 +122,8 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
       if (clientId) {
         await loadGoogleIdentityScript();
         const googleId = await requestGoogleUserSub(clientId);
-        await verifyGoogleCustomerLogin(googleId);
-        onLoginSuccess?.({ phoneDisplay: 'Google', googleId });
+        const { isWorker } = await verifyGoogleCustomerLogin(googleId);
+        onLoginSuccess?.({ phoneDisplay: 'Google', googleId, isWorker });
         onClose();
         return;
       }
@@ -133,8 +139,8 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
         });
         return;
       }
-      await verifyGoogleCustomerLogin(googleId);
-      onLoginSuccess?.({ phoneDisplay: 'Google', googleId });
+      const { isWorker } = await verifyGoogleCustomerLogin(googleId);
+      onLoginSuccess?.({ phoneDisplay: 'Google', googleId, isWorker });
       onClose();
     } catch (err: unknown) {
       setErrors({ general: err instanceof Error ? err.message : 'Google нэвтрэхэд алдаа гарлаа.' });

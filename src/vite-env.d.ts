@@ -3,6 +3,8 @@
 interface ImportMetaEnv {
   readonly VITE_SUPABASE_URL?: string;
   readonly VITE_SUPABASE_ANON_KEY?: string;
+  /** Анкет зургийн bucket (public). Анхдагч: anket */
+  readonly VITE_SUPABASE_ANKET_BUCKET?: string;
   readonly VITE_GOOGLE_CLIENT_ID?: string;
 }
 

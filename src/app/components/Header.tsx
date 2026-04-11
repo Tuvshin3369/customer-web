@@ -30,6 +30,8 @@ interface HeaderProps {
   onHistoryClick?:       () => void;
   onGuestOrdersClick?:   () => void;   // ← guest "Захиалга" button
   isLoggedIn?:           boolean;
+  /** `customers.is_worker` — true бол «Анкет» цэс харагдана */
+  loggedInUserIsWorker?: boolean;
   /** Нэвтэрсэн хэрэглэгчийн утас (байхгүй бол «Хэрэглэгч») */
   loggedInUserLabel?:    string | null;
   cartCount?:            number;
@@ -142,6 +144,7 @@ export function Header({
   onHistoryClick,
   onGuestOrdersClick,
   isLoggedIn  = false,
+  loggedInUserIsWorker = false,
   loggedInUserLabel = null,
   cartCount   = 0,
   searchValue = '',
@@ -431,7 +434,10 @@ export function Header({
                   </div>
                   <div className="h-px bg-gray-100 mx-3" />
                   <div className="px-2 py-2">
-                    {USER_MENU_ITEMS.map(({ icon: Icon, label }) => (
+                    {(loggedInUserIsWorker
+                      ? USER_MENU_ITEMS
+                      : USER_MENU_ITEMS.filter((i) => i.label !== 'Анкет')
+                    ).map(({ icon: Icon, label }) => (
                       <button
                         key={label}
                         onClick={() => {

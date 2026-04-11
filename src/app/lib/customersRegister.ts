@@ -177,14 +177,14 @@ export async function registerCustomerWithGoogleId(googleId: string): Promise<vo
 export async function verifyCustomerLogin(
   phoneInput: string,
   password: string,
-): Promise<{ phone: number }> {
+): Promise<{ phone: number; isWorker: boolean }> {
   const { restBase, anonKey } = getSupabaseRest();
   const phoneNum = phoneToInt64(phoneInput);
   if (Number.isNaN(phoneNum)) {
     throw new Error('Утасны дугаар буруу байна.');
   }
   const q = new URLSearchParams({
-    select: 'phone,password_hash',
+    select: 'phone,password_hash,is_worker',
     phone: `eq.${phoneNum}`,
     limit: '1',
   });
@@ -203,7 +203,7 @@ export async function verifyCustomerLogin(
     }
     throw new Error('Утасны дугаар эсвэл нууц үг буруу байна.');
   }
-  const row = json[0] as { phone?: number; password_hash?: string | null };
+  const row = json[0] as { phone?: number; password_hash?: string | null; is_worker?: unknown };
   if (!row.password_hash) {
     throw new Error('Утасны дугаар эсвэл нууц үг буруу байна.');
   }
@@ -212,7 +212,7 @@ export async function verifyCustomerLogin(
   if (!ok) {
     throw new Error('Утасны дугаар эсвэл нууц үг буруу байна.');
   }
-  return { phone: row.phone ?? phoneNum };
+  return { phone: row.phone ?? phoneNum, isWorker: row.is_worker === true };
 }
 
 export function formatCustomerPhoneDisplay(phone: number): string {
@@ -288,15 +288,28 @@ export async function fetchCustomerProfileByGoogleId(googleId: string): Promise<
   return mapRowToProfileSnapshot(json[0] as Record<string, unknown>);
 }
 
-/** Google-ээр нэвтрэхээс өмнө мөр байгаа эсэхийг шалгана (stub / ирээдүйн OAuth-д `sub`). */
-export async function verifyGoogleCustomerLogin(googleId: string): Promise<void> {
+/** Google-ээр нэвтрэх: мөр байгаа эсэх + `is_worker` (Анкет цэс). */
+export async function verifyGoogleCustomerLogin(googleId: string): Promise<{ isWorker: boolean }> {
   const { restBase, anonKey } = getSupabaseRest();
   const id = googleId.trim();
   if (!id) throw new Error('Google ID олдсонгүй.');
-  const ok = await customerExistsByGoogleId(restBase, anonKey, id);
-  if (!ok) {
+  const q = new URLSearchParams({
+    select: 'is_worker',
+    google_id: `eq.${id}`,
+    limit: '1',
+  });
+  const res = await fetch(`${restBase}/rest/v1/customers?${q.toString()}`, {
+    headers: restHeaders(anonKey),
+  });
+  const json = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(formatPostgrestError(json, res) || 'Нэвтрэхэд алдаа гарлаа.');
+  }
+  if (!Array.isArray(json) || json.length === 0) {
     throw new Error('Энэ Google дансаар бүртгэл байхгүй байна. Эхлээд бүртгүүлнэ үү.');
   }
+  const row = json[0] as { is_worker?: unknown };
+  return { isWorker: row.is_worker === true };
 }
 
 function buildProfileFieldsPatch(
