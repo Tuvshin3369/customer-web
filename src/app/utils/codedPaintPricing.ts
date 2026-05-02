@@ -312,6 +312,8 @@ export interface CodedPaintSuggestionRow {
   color_code: string;
   color_name: string | null;
   item_number: string;
+  /** coded_paints.price */
+  listPrice: number;
   /** coded_paints r,g,b — бүгд байвал л */
   rgb: CodedPaintRgb | null;
 }
@@ -375,7 +377,7 @@ export async function searchCodedPaintsContaining(
   const safe = escapeIlikePattern(t);
   const pattern = `%${safe}%`;
   const qs = [
-    'select=id,color_code,color_name,item_number,r,g,b',
+    'select=id,color_code,color_name,item_number,r,g,b,price',
     `group_number=eq.${encodeURIComponent(groupNumber)}`,
     `color_code=ilike.${encodeURIComponent(pattern)}`,
     'order=color_code.asc',
@@ -408,6 +410,7 @@ export async function searchCodedPaintsContaining(
       color_code: cc,
       color_name: cn && cn.trim() ? cn : null,
       item_number: itemStr,
+      listPrice: numField(row.price, 0),
       rgb: parseCodedPaintRgbFromRow(row),
     });
   }
@@ -420,11 +423,11 @@ export async function fetchCodedPaintByExactCode(
   anonKey: string,
   groupNumber: string,
   colorCodeExact: string,
-): Promise<{ item_number: string; rgb: CodedPaintRgb | null } | null> {
+): Promise<{ item_number: string; rgb: CodedPaintRgb | null; listPrice: number } | null> {
   const code = colorCodeExact.trim();
   if (!code || !groupNumber) return null;
   const q = [
-    'select=item_number,r,g,b',
+    'select=item_number,r,g,b,price',
     `group_number=eq.${encodeURIComponent(groupNumber)}`,
     `color_code=eq.${encodeURIComponent(code)}`,
     'limit=1',
@@ -434,7 +437,7 @@ export async function fetchCodedPaintByExactCode(
   const row = json[0] as Record<string, unknown>;
   const inum = row.item_number;
   if (inum == null) return null;
-  return { item_number: String(inum), rgb: parseCodedPaintRgbFromRow(row) };
+  return { item_number: String(inum), rgb: parseCodedPaintRgbFromRow(row), listPrice: numField(row.price, 0) };
 }
 
 /** @deprecated fetchCodedPaintByExactCode ашиглана */

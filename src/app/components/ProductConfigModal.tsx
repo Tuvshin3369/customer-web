@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { X, Plus, Minus, ShoppingCart, Ruler, Maximize2, Palette, FileText } from 'lucide-react';
 import { Product, ProductType, CartItem, CartItemConfig } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { getBasePrice, calculateTotal } from '../utils/priceCalc';
+import { getBasePrice, getType4UnitPrice, calculateTotal } from '../utils/priceCalc';
 import { findFoamTierForArea } from '../utils/foamRange';
 import {
   fetchGroupNumberByGroupId,
@@ -175,6 +175,8 @@ export function ProductConfigModal({
   /** true бол өргөнийг гараар зассан — өндөр өөрчлөхөд автомат саналыг давтахгүй */
   const widthTouchedRef = useRef(false);
   const codeSuggestWrapRef = useRef<HTMLDivElement>(null);
+  /** Жагсаалаас сонгосны дараа debounce-тэй хайлт дахин саналыг автоматаар нээхгүй */
+  const suppressCodeSuggestAutoOpenRef = useRef(false);
 
   const [isManualSheetOpen, setIsManualSheetOpen] = useState(false);
 
@@ -193,6 +195,8 @@ export function ProductConfigModal({
   const [codeSuggestLoading, setCodeSuggestLoading] = useState(false);
   /** coded_paints r,g,b — урьдчилан харах дугуй */
   const [codedPaintPreviewRgb, setCodedPaintPreviewRgb] = useState<CodedPaintRgb | null>(null);
+  /** coded_paints.price — кодтой нэгж үнэнд нэмэгдэнэ */
+  const [codedPaintListPrice, setCodedPaintListPrice] = useState(0);
   /** Код ба groups.product_number зөрөх үед сагс / UI-д ашиглах бараа */
   const [resolvedPaintProduct, setResolvedPaintProduct] = useState<Product | null>(null);
 
@@ -253,8 +257,10 @@ export function ProductConfigModal({
       setCodeSuggestions([]);
       setShowCodeSuggestions(false);
       setCodeSuggestLoading(false);
+      suppressCodeSuggestAutoOpenRef.current = false;
       setResolvedPaintProduct(null);
       setCodedPaintPreviewRgb(null);
+      setCodedPaintListPrice(0);
       const eff =
         product?.is_coded_paint === true
           ? 4
@@ -334,7 +340,9 @@ export function ProductConfigModal({
           const rows = await searchCodedPaintsContaining(url, key, paintGroupNumber, needle);
           if (!cancelled) {
             setCodeSuggestions(rows);
-            setShowCodeSuggestions(rows.length > 0);
+            setShowCodeSuggestions(
+              rows.length > 0 && !suppressCodeSuggestAutoOpenRef.current,
+            );
           }
         } catch {
           if (!cancelled) {
@@ -354,12 +362,13 @@ export function ProductConfigModal({
   }, [isOpen, type, product?.is_coded_paint, paintGroupNumber, colorCode]);
 
   const tryResolvePaintFromCode = useCallback(
-    async (exactCode: string, itemNumberHint?: string | null) => {
+    async (exactCode: string) => {
       if (!product || type !== 4 || product.is_coded_paint !== true) return;
       const code = exactCode.trim();
       if (!code) {
         setResolvedPaintProduct(null);
         setCodedPaintPreviewRgb(null);
+        setCodedPaintListPrice(0);
         return;
       }
       const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
@@ -367,18 +376,15 @@ export function ProductConfigModal({
       const sid = storeId != null ? String(storeId).trim() : '';
       if (!url || !key || !sid || paintGroupNumber == null) return;
 
-      let itemNum =
-        itemNumberHint != null && String(itemNumberHint).trim() ? String(itemNumberHint).trim() : '';
-      if (!itemNum) {
-        const meta = await fetchCodedPaintByExactCode(url, key, paintGroupNumber, code);
-        if (!meta) {
-          setResolvedPaintProduct(null);
-          setCodedPaintPreviewRgb(null);
-          return;
-        }
-        itemNum = meta.item_number;
-        setCodedPaintPreviewRgb(meta.rgb);
+      const meta = await fetchCodedPaintByExactCode(url, key, paintGroupNumber, code);
+      if (!meta) {
+        setResolvedPaintProduct(null);
+        setCodedPaintPreviewRgb(null);
+        setCodedPaintListPrice(0);
+        return;
       }
+      setCodedPaintPreviewRgb(meta.rgb);
+      setCodedPaintListPrice(meta.listPrice);
 
       try {
         const resolved = await resolvePaintCatalogProductForCode(url, key, {
@@ -386,7 +392,7 @@ export function ProductConfigModal({
           brandId: brandIdProp ?? product.brandId,
           onlineDiscountPercent,
           anchorProduct: product,
-          codedItemNumber: itemNum,
+          codedItemNumber: meta.item_number,
         });
         setResolvedPaintProduct(resolved);
       } catch {
@@ -481,6 +487,7 @@ export function ProductConfigModal({
       height:    height    ? parseFloat(height)    : undefined,
       width:     width     ? parseFloat(width)     : undefined,
       colorCode: colorCode || undefined,
+      codedPaintListPrice: colorCode.trim() ? codedPaintListPrice : undefined,
       foamUnitPrice:
         product?.is_foam_range === true && foamUnitPrice != null && Number.isFinite(foamUnitPrice)
           ? Math.round(foamUnitPrice)
@@ -491,7 +498,18 @@ export function ProductConfigModal({
           : undefined,
     };
     return calculateTotal(productForPricing, config, quantity);
-  }, [productForPricing, product?.is_foam_range, length, height, width, colorCode, quantity, foamUnitPrice, foamTotalArea]);
+  }, [
+    productForPricing,
+    product?.is_foam_range,
+    length,
+    height,
+    width,
+    colorCode,
+    codedPaintListPrice,
+    quantity,
+    foamUnitPrice,
+    foamTotalArea,
+  ]);
 
   // ── Child subtotal — Σ (child qty × child price) for selected rows ───────
   const childTotal = useMemo(
@@ -534,6 +552,7 @@ export function ProductConfigModal({
       height:    height    ? parseFloat(height)    : undefined,
       width:     width     ? parseFloat(width)     : undefined,
       colorCode: colorCode.trim() || undefined,
+      codedPaintListPrice: colorCode.trim() ? codedPaintListPrice : undefined,
       foamUnitPrice:
         foamUnitPrice != null && Number.isFinite(foamUnitPrice) ? Math.round(foamUnitPrice) : undefined,
       foamTotalArea:
@@ -580,6 +599,13 @@ export function ProductConfigModal({
   if (!mounted || !product || !effectiveProduct) return null;
 
   const basePrice = getBasePrice(effectiveProduct);
+  const summaryUnitPrice =
+    type === 4
+      ? getType4UnitPrice(effectiveProduct, {
+          colorCode: colorCode || undefined,
+          codedPaintListPrice,
+        })
+      : basePrice;
   const manualHref = effectiveProduct.manualUrl?.trim() ?? '';
   const hasManual = manualHref.length > 0;
 
@@ -659,7 +685,7 @@ export function ProductConfigModal({
                 </p>
               ) : type !== 3 ? (
                 <p className="text-sm font-semibold text-blue-600 mt-1">
-                  ₮{basePrice.toLocaleString()}
+                  ₮{summaryUnitPrice.toLocaleString()}
                   {type === 2 && <span className="text-[11px] font-normal text-gray-400 ml-0.5">/ см</span>}
                 </p>
               ) : null}
@@ -814,8 +840,10 @@ export function ProductConfigModal({
                         value={colorCode}
                         onChange={(e) => {
                           const v = e.target.value;
+                          suppressCodeSuggestAutoOpenRef.current = false;
                           setColorCode(v);
                           setCodedPaintPreviewRgb(null);
+                          setCodedPaintListPrice(0);
                           if (!v.trim()) setResolvedPaintProduct(null);
                           touch('colorCode');
                         }}
@@ -823,7 +851,12 @@ export function ProductConfigModal({
                           void tryResolvePaintFromCode(e.target.value);
                         }}
                         onFocus={() => {
-                          if (codeSuggestions.length > 0) setShowCodeSuggestions(true);
+                          if (
+                            codeSuggestions.length > 0 &&
+                            !suppressCodeSuggestAutoOpenRef.current
+                          ) {
+                            setShowCodeSuggestions(true);
+                          }
                         }}
                         autoComplete="off"
                         className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
@@ -844,11 +877,13 @@ export function ProductConfigModal({
                                 className="w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-gray-50 active:bg-gray-100"
                                 onMouseDown={(ev) => ev.preventDefault()}
                                 onClick={() => {
+                                  suppressCodeSuggestAutoOpenRef.current = true;
                                   setColorCode(row.color_code);
                                   setCodedPaintPreviewRgb(row.rgb);
+                                  setCodedPaintListPrice(row.listPrice);
                                   setShowCodeSuggestions(false);
                                   touch('colorCode');
-                                  void tryResolvePaintFromCode(row.color_code, row.item_number);
+                                  void tryResolvePaintFromCode(row.color_code);
                                 }}
                               >
                                 {row.color_code}
@@ -885,6 +920,9 @@ export function ProductConfigModal({
                     )}
                   </div>
                 </div>
+                <p className="text-[11px] text-gray-400 mt-1.5 pl-0.5 leading-snug">
+                  Дэлгэцнээс хамаарч бодит өнгө энд өөр харагдаж болно
+                </p>
               </div>
             )}
 

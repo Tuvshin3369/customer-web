@@ -9,6 +9,21 @@ export function getBasePrice(product: Product): number {
 }
 
 /**
+ * TYPE 4: өнгийн код байхгүй → зөвхөн base; код байвал base + service_price + coded_paints.price
+ */
+export function getType4UnitPrice(
+  product: Product,
+  config: Pick<CartItemConfig, 'colorCode' | 'codedPaintListPrice'>,
+): number {
+  const base = getBasePrice(product);
+  const trimmed = config.colorCode?.trim();
+  if (!trimmed) return base;
+  const service = product.servicePrice ?? 0;
+  const coded = config.codedPaintListPrice ?? 0;
+  return Math.max(0, Math.round(base + service + coded));
+}
+
+/**
  * Calculates the total price for a cart entry.
  *
  * Formula per product type:
@@ -16,7 +31,7 @@ export function getBasePrice(product: Product): number {
  *   TYPE 2 → basePrice × length × quantity
  *   TYPE 3 + is_foam_range → foamUnitPrice × quantity («Бодох»)
  *   TYPE 3 (бусад) → basePrice × height × (width ?? 1) × quantity
- *   TYPE 4 → basePrice × quantity
+ *   TYPE 4 → өнгийн код байхгүй: basePrice × quantity; байвал (base+service+coded_paints.price) × quantity
  *
  * Add new types here to keep pricing logic in one place.
  */
@@ -45,10 +60,13 @@ export function calculateTotal(
       const w = config.width ?? 1;
       return base * h * w * quantity;
     }
+    case 4: {
+      const unit = getType4UnitPrice(product, config);
+      return Math.max(0, Math.round(unit * quantity));
+    }
     case 1:
-    case 4:
     default:
-      return base * quantity;
+      return Math.max(0, Math.round(base * quantity));
   }
 }
 

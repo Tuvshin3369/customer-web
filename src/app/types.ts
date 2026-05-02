@@ -76,6 +76,8 @@ export interface CartItemConfig {
   height?: number;    // TYPE 3
   width?: number;     // TYPE 3 (optional)
   colorCode?: string; // TYPE 4
+  /** TYPE 4: coded_paints.price (кодтой үед нэгж үнэнд нэмэгдэнэ) */
+  codedPaintListPrice?: number;
   /** is_foam_range: «Бодох»-ийн дараах нэгж үнэ (1 ширхэг) */
   foamUnitPrice?: number;
   /** is_foam_range: өндөр×өргөн×waste */
