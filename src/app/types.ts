@@ -58,6 +58,8 @@ export interface Product {
   foamRange?: FoamRangeRow[];
   /** true бол урт (productType 2-той ижил) */
   is_calculate_length?: boolean;
+  /** Хүргэлт: Σ(тоо × coefficient)-ийг ceil → машины тоо */
+  loadingCoefficient?: number;
   /** coded_paints шүүхэд: groups.id → groups.group_number */
   groupId?: string;
   servicePrice?: number;

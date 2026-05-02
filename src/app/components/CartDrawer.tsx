@@ -190,6 +190,7 @@ export function CartDrawer({
                     }
                   }}
                   onIncrement={() => onUpdateQuantity(item.cartItemId, item.quantity + 1)}
+                  onQuantityCommit={(q) => onUpdateQuantity(item.cartItemId, q)}
                   onImageClick={() => {
                     const imgs =
                       item.product.images && item.product.images.length > 0
@@ -294,11 +295,36 @@ interface CartItemCardProps {
   onRemove: () => void;
   onDecrement: () => void;
   onIncrement: () => void;
+  onQuantityCommit: (quantity: number) => void;
   onImageClick: () => void;
 }
 
-function CartItemCard({ item, configLabel: label, onRemove, onDecrement, onIncrement, onImageClick }: CartItemCardProps) {
+const CART_QTY_MAX = 99999;
+
+function CartItemCard({
+  item,
+  configLabel: label,
+  onRemove,
+  onDecrement,
+  onIncrement,
+  onQuantityCommit,
+  onImageClick,
+}: CartItemCardProps) {
   const lineTotal = calculateTotal(item.product, item.config, item.quantity);
+  const [qtyRaw, setQtyRaw] = useState(String(item.quantity));
+
+  useEffect(() => {
+    setQtyRaw(String(item.quantity));
+  }, [item.quantity, item.cartItemId]);
+
+  function commitQtyInput(str: string) {
+    const parsed = parseInt(str, 10);
+    if (!Number.isNaN(parsed)) {
+      onQuantityCommit(Math.min(CART_QTY_MAX, Math.max(1, parsed)));
+    } else {
+      setQtyRaw(String(item.quantity));
+    }
+  }
 
   return (
     <div className="bg-white border border-gray-100 rounded-2xl p-3 shadow-sm">
@@ -351,9 +377,26 @@ function CartItemCard({ item, configLabel: label, onRemove, onDecrement, onIncre
               >
                 <Minus className="w-3.5 h-3.5" />
               </button>
-              <span className="w-7 text-center text-sm font-semibold text-gray-800">
-                {item.quantity}
-              </span>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                value={qtyRaw}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/[^0-9]/g, '');
+                  setQtyRaw(v);
+                  if (v !== '') {
+                    const n = parseInt(v, 10);
+                    if (!Number.isNaN(n)) {
+                      onQuantityCommit(Math.min(CART_QTY_MAX, Math.max(1, n)));
+                    }
+                  }
+                }}
+                onBlur={() => commitQtyInput(qtyRaw)}
+                onFocus={(e) => e.target.select()}
+                className="w-12 min-w-[3rem] text-center text-sm font-semibold text-gray-800 bg-transparent outline-none"
+                aria-label="Тоо ширхэг"
+              />
               <button
                 onClick={onIncrement}
                 className="w-7 h-7 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors active:scale-90"

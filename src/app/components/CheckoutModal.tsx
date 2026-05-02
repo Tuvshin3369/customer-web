@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   X, Phone, Building2, FileText, Hash, Map,
   MapPin, Navigation, Truck, CheckCircle2, AlertCircle,
-  Loader2, RefreshCw, Route, Store, Gift, ChevronLeft, ChevronDown,
+  Loader2, RefreshCw, Store, Gift, ChevronLeft, ChevronDown,
   Copy, Check,
 } from 'lucide-react';
 import { CartItem } from '../types';
@@ -54,12 +54,6 @@ async function parseRestJson(res: Response): Promise<unknown> {
 type DeliveryType  = 'pickup' | 'taxi' | 'delivery';
 type WizardStep    = 1 | 2 | 3;
 
-interface Branch {
-  id:          number;
-  address_lat: number;
-  address_lng: number;
-}
-
 interface StoreConfig {
   base_price_per_km:       number;
   min_delivery_fee:        number;
@@ -77,8 +71,8 @@ interface MainBranchPaymentRow {
   personal_account: string;
 }
 
-interface NearestBranchResult {
-  branch:     Branch;
+/** Гол салбарын координатаас хүргэлтийн цэг хүртэлх зай */
+interface MainBranchRoute {
   distanceKm: number;
   displayKm:  number;
 }
@@ -140,10 +134,11 @@ export function CheckoutModal({
     }, 160);
   }
 
-  // ── Branches (fetched from DB — location only) ────────────────────────────
-  const [branches,          setBranches]          = useState<Branch[]>([]);
-  const [isLoadingBranches, setIsLoadingBranches] = useState(false);
-  const [branchesError,     setBranchesError]     = useState('');
+  /** Гол салбар (is_main_branch) — хүргэлтийн эхлэх цэг */
+  const [mainBranchOrigin, setMainBranchOrigin] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
 
   // ── Store config (fetched from DB — pricing) ──────────────────────────────
   const [store,          setStore]          = useState<StoreConfig | null>(null);
@@ -202,35 +197,46 @@ export function CheckoutModal({
   //  REACTIVE CALCULATION CHAIN
   // ────────────────────────────────────────────────────────────────────────���
 
-  const nearestBranchResult = useMemo<NearestBranchResult | null>(() => {
-    if (deliveryType !== 'delivery') return null;
-    if (!location || branches.length === 0) return null;
-    let nearest = branches[0];
-    let minDist = Infinity;
-    for (const branch of branches) {
-      const d = calculateDistanceKm(
-        branch.address_lat, branch.address_lng,
-        location.lat,       location.lng,
-      );
-      if (d < minDist) { minDist = d; nearest = branch; }
-    }
-    return { branch: nearest, distanceKm: minDist, displayKm: Number(minDist.toFixed(1)) };
-  }, [deliveryType, location, branches]);
+  const isFreeDelivery = useMemo<boolean>(() => {
+    if (deliveryType !== 'delivery' || !store) return false;
+    return store.free_delivery_threshold > 0 && grandTotal >= store.free_delivery_threshold;
+  }, [deliveryType, store, grandTotal]);
 
-  const deliveryFee = useMemo<number>(() => {
-    if (deliveryType !== 'delivery' || !nearestBranchResult || !store) return 0;
-    if (store.free_delivery_threshold > 0 && grandTotal >= store.free_delivery_threshold) return 0;
-    const calculatedFee = nearestBranchResult.distanceKm * store.base_price_per_km;
+  const mainBranchRoute = useMemo<MainBranchRoute | null>(() => {
+    if (deliveryType !== 'delivery' || !location || !mainBranchOrigin) return null;
+    const d = calculateDistanceKm(
+      mainBranchOrigin.lat,
+      mainBranchOrigin.lng,
+      location.lat,
+      location.lng,
+    );
+    return { distanceKm: d, displayKm: Number(d.toFixed(1)) };
+  }, [deliveryType, location, mainBranchOrigin]);
+
+  const transportFeePerCar = useMemo<number>(() => {
+    if (deliveryType !== 'delivery' || !mainBranchRoute || !store) return 0;
+    if (isFreeDelivery) return 0;
+    const calculatedFee = mainBranchRoute.distanceKm * store.base_price_per_km;
     const rawFee        = Math.max(calculatedFee, store.min_delivery_fee ?? 0);
     return Math.round(rawFee / 100) * 100;
-  }, [deliveryType, nearestBranchResult, store, grandTotal]);
+  }, [deliveryType, mainBranchRoute, store, isFreeDelivery]);
 
-  const isFreeDelivery = useMemo<boolean>(() => {
-    if (deliveryType !== 'delivery' || !nearestBranchResult || !store) return false;
-    return store.free_delivery_threshold > 0 && grandTotal >= store.free_delivery_threshold;
-  }, [deliveryType, nearestBranchResult, store, grandTotal]);
+  const deliveryCarCount = useMemo<number>(() => {
+    let sum = 0;
+    for (const item of items) {
+      const coeff = item.product.loadingCoefficient;
+      const c = coeff != null && Number.isFinite(coeff) && coeff > 0 ? coeff : 1;
+      sum += item.quantity * c;
+    }
+    return Math.ceil(sum);
+  }, [items]);
 
-  const finalTotal = useMemo(() => grandTotal + deliveryFee, [grandTotal, deliveryFee]);
+  const totalDeliveryCharge = useMemo<number>(() => {
+    if (deliveryType !== 'delivery' || isFreeDelivery) return 0;
+    return transportFeePerCar * deliveryCarCount;
+  }, [deliveryType, isFreeDelivery, transportFeePerCar, deliveryCarCount]);
+
+  const finalTotal = useMemo(() => grandTotal + totalDeliveryCharge, [grandTotal, totalDeliveryCharge]);
 
   const paymentBankDetails = useMemo(() => {
     const m = mainBranchPayment;
@@ -260,26 +266,6 @@ export function CheckoutModal({
     };
   }, [isLoggedIn, customerRegisterDb, mainBranchPayment]);
 
-  // ── Fetch branches ───────────────────────────────────────────────────────
-  async function fetchBranches() {
-    setIsLoadingBranches(true);
-    setBranchesError('');
-    try {
-      const res  = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-f6232fa4/branches`,
-        { headers: { Authorization: `Bearer ${publicAnonKey}` } },
-      );
-      const json = await res.json();
-      if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
-      setBranches(json.data as Branch[]);
-    } catch (err: any) {
-      console.error('fetchBranches error:', err);
-      setBranchesError(err.message || 'Салбарын эдээлэл ачааллаж чадсангүй');
-    } finally {
-      setIsLoadingBranches(false);
-    }
-  }
-
   // ── Fetch store config ────────────────────────────────────────────────────
   async function fetchStore() {
     if (storeId === null) return;
@@ -305,6 +291,7 @@ export function CheckoutModal({
     if (!storeId) {
       setStoreRulesText(null);
       setMainBranchPayment(null);
+      setMainBranchOrigin(null);
       setPaymentDisplayError('');
       return;
     }
@@ -340,7 +327,7 @@ export function CheckoutModal({
 
       const bq = new URLSearchParams({
         select:
-          'phone_1,company_bank,company_name,company_account,personal_bank,personal_name,personal_account',
+          'phone_1,company_bank,company_name,company_account,personal_bank,personal_name,personal_account,address_lat,address_lng',
         store_id: `eq.${storeId}`,
         is_main_branch: 'eq.true',
         limit: '1',
@@ -367,14 +354,23 @@ export function CheckoutModal({
           personal_name: norm(row.personal_name),
           personal_account: norm(row.personal_account),
         });
+        const lat = Number(row.address_lat);
+        const lng = Number(row.address_lng);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          setMainBranchOrigin({ lat, lng });
+        } else {
+          setMainBranchOrigin(null);
+        }
       } else {
         setMainBranchPayment(null);
+        setMainBranchOrigin(null);
       }
     } catch (err: unknown) {
       console.error('fetchPaymentDisplayContext error:', err);
       setPaymentDisplayError(err instanceof Error ? err.message : 'Төлбөрийн мэдээлэл ачаалахад алдаа');
       setStoreRulesText(null);
       setMainBranchPayment(null);
+      setMainBranchOrigin(null);
     } finally {
       setIsLoadingPaymentDisplay(false);
     }
@@ -397,9 +393,9 @@ export function CheckoutModal({
       setRulesSheetOpen(false);
       setStoreRulesText(null);
       setMainBranchPayment(null);
+      setMainBranchOrigin(null);
       setCustomerRegisterDb(null);
       setPaymentDisplayError('');
-      fetchBranches();
       fetchStore();
       fetchPaymentDisplayContext();
       // Auto-focus phone field after the slide-up animation completes
@@ -527,7 +523,12 @@ export function CheckoutModal({
     setSubmitted(true);
   }
 
-  const isLoading = isLoadingBranches || isLoadingStore;
+  const isLoading = isLoadingStore || isLoadingPaymentDisplay;
+
+  function retryDeliveryPricingData() {
+    void fetchStore();
+    void fetchPaymentDisplayContext();
+  }
 
   if (!mounted) return null;
 
@@ -731,13 +732,13 @@ export function CheckoutModal({
               <div className="px-5 pt-2 pb-6 space-y-3">
 
                 {/* Error banners — shown only here where delivery data matters */}
-                {(branchesError || storeError) && (
+                {(paymentDisplayError || storeError) && (
                   <div className="space-y-2">
-                    {branchesError && (
+                    {paymentDisplayError && (
                       <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
                         <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                        <p className="flex-1 text-xs text-red-600 leading-snug">{branchesError}</p>
-                        <button onClick={fetchBranches} className="shrink-0 flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700">
+                        <p className="flex-1 text-xs text-red-600 leading-snug">{paymentDisplayError}</p>
+                        <button type="button" onClick={() => void fetchPaymentDisplayContext()} className="shrink-0 flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700">
                           <RefreshCw className="w-3 h-3" /> Retry
                         </button>
                       </div>
@@ -746,7 +747,7 @@ export function CheckoutModal({
                       <div className="flex items-center gap-2.5 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
                         <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
                         <p className="flex-1 text-xs text-red-600 leading-snug">{storeError}</p>
-                        <button onClick={fetchStore} className="shrink-0 flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700">
+                        <button type="button" onClick={() => void fetchStore()} className="shrink-0 flex items-center gap-1 text-[11px] font-semibold text-red-500 hover:text-red-700">
                           <RefreshCw className="w-3 h-3" /> Retry
                         </button>
                       </div>
@@ -777,9 +778,12 @@ export function CheckoutModal({
                         label: 'Хүргүүлнэ',
                         sub:   'Манай хүргэлт',
                         icon:  <MapPin className="w-4 h-4" />,
-                        badge: isLoadingBranches
-                          ? <Loader2 className="w-3 h-3 animate-spin text-gray-300" />
-                          : <span className="text-[10px] text-gray-400">км тооцоо</span>,
+                        badge:
+                          isLoadingStore || isLoadingPaymentDisplay ? (
+                            <Loader2 className="w-3 h-3 animate-spin text-gray-300" />
+                          ) : (
+                            <span className="text-[10px] text-gray-400">км тооцоо</span>
+                          ),
                       },
                     ] as const
                   ).map(({ value, label, sub, icon, badge }) => (
@@ -866,9 +870,6 @@ export function CheckoutModal({
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-semibold text-green-700 mb-0.5">Байршил тохируулагдлаа</p>
                           <p className="text-sm text-green-800 leading-snug">{location.address}</p>
-                          <p className="text-[10px] text-green-600 mt-1 font-mono">
-                            {location.lat.toFixed(5)}, {location.lng.toFixed(5)}
-                          </p>
                         </div>
                         <button
                           type="button"
@@ -892,15 +893,17 @@ export function CheckoutModal({
                       </p>
                     )}
 
-                    <DeliveryFeeCard
+                    <DeliveryChargeSummaryCard
                       location={location}
                       isLoading={isLoading}
-                      dataError={branchesError || storeError}
-                      nearestBranchResult={nearestBranchResult}
+                      dataError={paymentDisplayError || storeError}
+                      hasMainBranchGeo={mainBranchOrigin != null}
                       store={store}
-                      deliveryFee={deliveryFee}
+                      transportFeePerCar={transportFeePerCar}
+                      carCount={deliveryCarCount}
+                      totalDelivery={totalDeliveryCharge}
                       isFreeDelivery={isFreeDelivery}
-                      onRetry={() => { fetchBranches(); fetchStore(); }}
+                      onRetry={retryDeliveryPricingData}
                     />
                   </div>
                 )}
@@ -970,8 +973,8 @@ export function CheckoutModal({
                           <span className="inline-flex items-center gap-1 text-green-600 font-semibold">
                             <Gift className="w-3.5 h-3.5" /> Үнэгүй
                           </span>
-                        ) : location && nearestBranchResult && store ? (
-                          <span className="text-gray-900 font-semibold">₮{deliveryFee.toLocaleString()}</span>
+                        ) : location && mainBranchRoute && store ? (
+                          <span className="text-gray-900 font-semibold">₮{totalDeliveryCharge.toLocaleString()}</span>
                         ) : (
                           <span className="text-gray-400 text-xs italic">байршил хүлээж байна</span>
                         )}
@@ -1213,29 +1216,39 @@ function FreeDeliveryProgress({
   );
 }
 
-// ─── Delivery fee breakdown card ──────────────────────────────────────────────
-interface DeliveryFeeCardProps {
-  location:            GeoLocation | null;
-  isLoading:           boolean;
-  dataError:           string;
-  nearestBranchResult: NearestBranchResult | null;
-  store:               StoreConfig | null;
-  deliveryFee:         number;
-  isFreeDelivery:      boolean;
-  onRetry:             () => void;
+// ─── Хүргэлтийн төлбөрийн товч хураангуй (нэг машин, машины тоо, нийт) ─────
+interface DeliveryChargeSummaryCardProps {
+  location:             GeoLocation | null;
+  isLoading:            boolean;
+  dataError:            string;
+  hasMainBranchGeo:     boolean;
+  store:                StoreConfig | null;
+  transportFeePerCar:   number;
+  carCount:             number;
+  totalDelivery:        number;
+  isFreeDelivery:       boolean;
+  onRetry:              () => void;
 }
 
-function DeliveryFeeCard({
-  location, isLoading, dataError,
-  nearestBranchResult, store, deliveryFee, isFreeDelivery, onRetry,
-}: DeliveryFeeCardProps) {
+function DeliveryChargeSummaryCard({
+  location,
+  isLoading,
+  dataError,
+  hasMainBranchGeo,
+  store,
+  transportFeePerCar,
+  carCount,
+  totalDelivery,
+  isFreeDelivery,
+  onRetry,
+}: DeliveryChargeSummaryCardProps) {
   if (!location) return null;
 
   if (isLoading) {
     return (
       <div className="flex items-center gap-2.5 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-3">
         <Loader2 className="w-4 h-4 text-gray-400 animate-spin shrink-0" />
-        <p className="text-xs text-gray-400">Ойрхон салбар хайж байна…</p>
+        <p className="text-xs text-gray-400">Тооцоолж байна…</p>
       </div>
     );
   }
@@ -1244,35 +1257,37 @@ function DeliveryFeeCard({
     return (
       <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
         <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-        <p className="flex-1 text-xs text-red-600">Салбарын мэдээлэл ачаалагдсангүй</p>
-        <button onClick={onRetry} className="text-[11px] font-semibold text-red-500 hover:text-red-700 flex items-center gap-1">
+        <p className="flex-1 text-xs text-red-600">Мэдээлэл ачаалагдсангүй</p>
+        <button type="button" onClick={onRetry} className="text-[11px] font-semibold text-red-500 hover:text-red-700 flex items-center gap-1">
           <RefreshCw className="w-3 h-3" /> Retry
         </button>
       </div>
     );
   }
 
-  if (!nearestBranchResult || !store) {
+  if (!store || !hasMainBranchGeo) {
     return (
       <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3.5 py-2.5">
         <Store className="w-4 h-4 text-gray-300 shrink-0" />
-        <p className="text-xs text-gray-400">Салбарын мэдээлэл олдсонгүй</p>
+        <p className="text-xs text-gray-400">Гол салбарын байршил эсвэл дэлгүүрийн тохиргоо олдсонгүй</p>
       </div>
     );
   }
 
-  const { branch, displayKm } = nearestBranchResult;
-
   if (isFreeDelivery) {
     return (
-      <div className="bg-green-50 border border-green-200 rounded-xl px-3.5 py-3 space-y-1.5">
-        <div className="flex items-center gap-1.5">
-          <Gift className="w-3.5 h-3.5 text-green-500 shrink-0" />
-          <p className="text-xs font-semibold text-green-700">Үнэгүй хүргэлт — салбар #{branch.id}</p>
+      <div className="bg-green-50 border border-green-200 rounded-xl px-3.5 py-3 space-y-2">
+        <div className="flex justify-between text-xs">
+          <span className="text-green-700">Тээврийн хөлс</span>
+          <span className="font-semibold text-green-800">Үнэгүй</span>
         </div>
-        <div className="flex justify-between text-xs text-green-600">
-          <span className="flex items-center gap-1"><Route className="w-3 h-3" /> {displayKm} км</span>
-          <span className="font-bold">₮0 — Үнэгүй</span>
+        <div className="flex justify-between text-xs">
+          <span className="text-green-700">Машины тоо</span>
+          <span className="font-semibold text-green-900">{carCount}</span>
+        </div>
+        <div className="flex justify-between text-xs pt-1 border-t border-green-200">
+          <span className="font-semibold text-green-800">Нийт хүргэлт</span>
+          <span className="font-bold text-green-900">₮0</span>
         </div>
       </div>
     );
@@ -1280,33 +1295,18 @@ function DeliveryFeeCard({
 
   return (
     <div className="bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-3 space-y-2">
-      <div className="flex items-center gap-1.5">
-        <Store className="w-3.5 h-3.5 text-blue-500 shrink-0" />
-        <p className="text-xs font-semibold text-blue-700">Тооцоо — ойрхон салбар #{branch.id}</p>
+      <div className="flex justify-between text-xs">
+        <span className="text-blue-700">Тээврийн хөлс</span>
+        <span className="font-semibold text-blue-900">₮{transportFeePerCar.toLocaleString()}</span>
       </div>
-      <div className="space-y-1.5">
-        <div className="flex justify-between">
-          <span className="flex items-center gap-1 text-xs text-blue-600"><Route className="w-3 h-3" /> Зай</span>
-          <span className="text-xs font-semibold text-blue-700">{displayKm} км</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="flex items-center gap-1 text-xs text-blue-600"><Truck className="w-3 h-3" /> 1 км үнэ</span>
-          <span className="text-xs font-semibold text-blue-700">₮{store.base_price_per_km.toLocaleString()}</span>
-        </div>
-        {store.min_delivery_fee > 0 && (
-          <div className="flex justify-between">
-            <span className="text-xs text-blue-600">Доод хэмжээ</span>
-            <span className="text-xs text-blue-600">₮{store.min_delivery_fee.toLocaleString()}</span>
-          </div>
-        )}
+      <div className="flex justify-between text-xs">
+        <span className="text-blue-700">Машины тоо</span>
+        <span className="font-semibold text-blue-900">{carCount}</span>
       </div>
-      <div className="border-t border-blue-200 pt-1.5 flex justify-between items-center">
-        <span className="text-xs font-semibold text-blue-700">Тээврийн хөлс</span>
-        <span className="text-sm font-bold text-blue-900">₮{deliveryFee.toLocaleString()}</span>
+      <div className="flex justify-between text-xs pt-1 border-t border-blue-200">
+        <span className="font-semibold text-blue-800">Нийт хүргэлт</span>
+        <span className="font-bold text-blue-900">₮{totalDelivery.toLocaleString()}</span>
       </div>
-      <p className="text-[10px] text-blue-400 text-right">
-        {displayKm} км × ₮{store.base_price_per_km.toLocaleString()} → ₮{deliveryFee.toLocaleString()} (₮100 дугуйлсан)
-      </p>
     </div>
   );
 }

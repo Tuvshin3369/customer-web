@@ -203,7 +203,7 @@ const RELATED_PRODUCT_KEYS = [
 ] as const;
 
 const PRODUCTS_LIST_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function mapRowToChildProduct(
   row: Record<string, unknown>,
@@ -622,6 +622,10 @@ export default function App() {
             brandId: row.brand_id != null && row.brand_id !== '' ? String(row.brand_id) : undefined,
             servicePrice: numField(row.service_price, 0),
             is_pigment: row.is_pigment === true,
+            loadingCoefficient: (() => {
+              const lc = numField(row.loading_coefficient, 0);
+              return lc > 0 ? lc : undefined;
+            })(),
             name: nm,
             category: 'Бусад',
             price: retail,
