@@ -58,6 +58,11 @@ export interface Product {
   foamRange?: FoamRangeRow[];
   /** true бол урт (productType 2-той ижил) */
   is_calculate_length?: boolean;
+  /** coded_paints шүүхэд: groups.id → groups.group_number */
+  groupId?: string;
+  servicePrice?: number;
+  is_pigment?: boolean;
+  brandId?: string;
   // ── Parent product fields ─────────────────────────────────────────────────
   /** related_product_* эсвэл children — ProductConfigModal-д «Нэмэлт бараа авах» */
   isParent?: boolean;

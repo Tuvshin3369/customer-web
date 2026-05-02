@@ -4,6 +4,13 @@ import { Product, ProductType, CartItem, CartItemConfig } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { getBasePrice, calculateTotal } from '../utils/priceCalc';
 import { findFoamTierForArea } from '../utils/foamRange';
+import {
+  fetchGroupNumberByGroupId,
+  fetchCodedPaintItemNumberExact,
+  resolvePaintCatalogProductForCode,
+  searchCodedPaintsContaining,
+  type CodedPaintSuggestionRow,
+} from '../utils/codedPaintPricing';
 import { ProductGallery } from './ProductGallery';
 import { ProductManualSheet } from './ProductManualSheet';
 
@@ -12,6 +19,10 @@ interface ProductConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (item: CartItem) => void;
+  /** Кодоор бараа солих REST дуудлага */
+  storeId?: string | null;
+  brandId?: string;
+  onlineDiscountPercent?: number;
 }
 
 /** is_foam_range: өргөний санал — өндөр × ratio */
@@ -135,7 +146,13 @@ function DimInput({
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 export function ProductConfigModal({
-  product, isOpen, onClose, onConfirm,
+  product,
+  isOpen,
+  onClose,
+  onConfirm,
+  storeId = null,
+  brandId: brandIdProp,
+  onlineDiscountPercent = 0,
 }: ProductConfigModalProps) {
   const [mounted, setMounted]   = useState(false);
   const [visible, setVisible]   = useState(false);
@@ -156,6 +173,7 @@ export function ProductConfigModal({
   const lengthInputRef = useRef<HTMLInputElement>(null);
   /** true бол өргөнийг гараар зассан — өндөр өөрчлөхөд автомат саналыг давтахгүй */
   const widthTouchedRef = useRef(false);
+  const codeSuggestWrapRef = useRef<HTMLDivElement>(null);
 
   const [isManualSheetOpen, setIsManualSheetOpen] = useState(false);
 
@@ -167,6 +185,13 @@ export function ProductConfigModal({
 
   // ── Child product quantities (isParent products only) ────────────────────
   const [childQtys, setChildQtys] = useState<Record<number, number>>({});
+
+  const [paintGroupNumber, setPaintGroupNumber] = useState<string | null>(null);
+  const [codeSuggestions, setCodeSuggestions] = useState<CodedPaintSuggestionRow[]>([]);
+  const [showCodeSuggestions, setShowCodeSuggestions] = useState(false);
+  const [codeSuggestLoading, setCodeSuggestLoading] = useState(false);
+  /** Код ба groups.product_number зөрөх үед сагс / UI-д ашиглах бараа */
+  const [resolvedPaintProduct, setResolvedPaintProduct] = useState<Product | null>(null);
 
   // ── Validation errors ───────────────────────────────────────────────────
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -180,10 +205,15 @@ export function ProductConfigModal({
         ? 2
         : 1;
 
-  const productForPricing = useMemo((): Product | null => {
+  const effectiveProduct = useMemo((): Product | null => {
     if (!product) return null;
-    return { ...product, productType: type };
-  }, [product, type]);
+    return resolvedPaintProduct ?? product;
+  }, [product, resolvedPaintProduct]);
+
+  const productForPricing = useMemo((): Product | null => {
+    if (!effectiveProduct) return null;
+    return { ...effectiveProduct, productType: type };
+  }, [effectiveProduct, type]);
 
   const foamRatio = useMemo((): number | null => {
     if (!product || product.is_foam_range !== true) return null;
@@ -191,9 +221,11 @@ export function ProductConfigModal({
     return typeof r === 'number' && r > 0 && Number.isFinite(r) ? r : null;
   }, [product]);
 
-  // Derive image list — always at least the primary imageUrl
-  const productImages = product
-    ? (product.images && product.images.length > 0 ? product.images : [product.imageUrl])
+  // Derive image list — always at least the primary imageUrl (кодоор сольсон барааны зураг)
+  const productImages = effectiveProduct
+    ? (effectiveProduct.images && effectiveProduct.images.length > 0
+        ? effectiveProduct.images
+        : [effectiveProduct.imageUrl])
     : [];
   const imageTotal = productImages.length;
 
@@ -214,6 +246,11 @@ export function ProductConfigModal({
       setGalleryIndex(0);
       setGalleryImages([]);
       setChildQtys({});
+      setPaintGroupNumber(null);
+      setCodeSuggestions([]);
+      setShowCodeSuggestions(false);
+      setCodeSuggestLoading(false);
+      setResolvedPaintProduct(null);
       const eff =
         product?.is_coded_paint === true
           ? 4
@@ -232,7 +269,138 @@ export function ProductConfigModal({
       const t = setTimeout(() => setMounted(false), 380);
       return () => clearTimeout(t);
     }
-  }, [isOpen]);
+  }, [isOpen, product?.id]);
+
+  // is_coded_paint: сонгосон барааны group_id → groups.group_number
+  useEffect(() => {
+    if (!isOpen || type !== 4 || product?.is_coded_paint !== true) {
+      setPaintGroupNumber(null);
+      return;
+    }
+    const gid = product.groupId?.trim();
+    if (!gid) {
+      setPaintGroupNumber(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
+      const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+      if (!url || !key) {
+        if (!cancelled) setPaintGroupNumber(null);
+        return;
+      }
+      const gn = await fetchGroupNumberByGroupId(url, key, gid);
+      if (!cancelled) setPaintGroupNumber(gn);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, type, product?.is_coded_paint, product?.groupId]);
+
+  // Code: coded_paints.color_code (ilike) + group_number
+  useEffect(() => {
+    if (!isOpen || type !== 4 || product?.is_coded_paint !== true) {
+      setCodeSuggestions([]);
+      setCodeSuggestLoading(false);
+      return;
+    }
+    const needle = colorCode.trim();
+    if (!needle || paintGroupNumber == null) {
+      setCodeSuggestions([]);
+      setCodeSuggestLoading(false);
+      setShowCodeSuggestions(false);
+      return;
+    }
+
+    let cancelled = false;
+    setCodeSuggestLoading(true);
+    const tm = window.setTimeout(() => {
+      void (async () => {
+        const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
+        const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+        if (!url || !key) {
+          if (!cancelled) {
+            setCodeSuggestions([]);
+            setCodeSuggestLoading(false);
+          }
+          return;
+        }
+        try {
+          const rows = await searchCodedPaintsContaining(url, key, paintGroupNumber, needle);
+          if (!cancelled) {
+            setCodeSuggestions(rows);
+            setShowCodeSuggestions(rows.length > 0);
+          }
+        } catch {
+          if (!cancelled) {
+            setCodeSuggestions([]);
+            setShowCodeSuggestions(false);
+          }
+        } finally {
+          if (!cancelled) setCodeSuggestLoading(false);
+        }
+      })();
+    }, 320);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(tm);
+    };
+  }, [isOpen, type, product?.is_coded_paint, paintGroupNumber, colorCode]);
+
+  const tryResolvePaintFromCode = useCallback(
+    async (exactCode: string, itemNumberHint?: string | null) => {
+      if (!product || type !== 4 || product.is_coded_paint !== true) return;
+      const code = exactCode.trim();
+      if (!code) {
+        setResolvedPaintProduct(null);
+        return;
+      }
+      const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
+      const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+      const sid = storeId != null ? String(storeId).trim() : '';
+      if (!url || !key || !sid || paintGroupNumber == null) return;
+
+      let itemNum =
+        itemNumberHint != null && String(itemNumberHint).trim() ? String(itemNumberHint).trim() : '';
+      if (!itemNum) {
+        itemNum = (await fetchCodedPaintItemNumberExact(url, key, paintGroupNumber, code)) ?? '';
+      }
+      if (!itemNum) {
+        setResolvedPaintProduct(null);
+        return;
+      }
+
+      try {
+        const resolved = await resolvePaintCatalogProductForCode(url, key, {
+          storeId: sid,
+          brandId: brandIdProp ?? product.brandId,
+          onlineDiscountPercent,
+          anchorProduct: product,
+          codedItemNumber: itemNum,
+        });
+        setResolvedPaintProduct(resolved);
+      } catch {
+        setResolvedPaintProduct(null);
+      }
+    },
+    [product, type, paintGroupNumber, storeId, brandIdProp, onlineDiscountPercent],
+  );
+
+  useEffect(() => {
+    if (resolvedPaintProduct) setChildQtys({});
+  }, [resolvedPaintProduct]);
+
+  useEffect(() => {
+    if (!showCodeSuggestions) return;
+    function onDoc(ev: MouseEvent) {
+      const el = codeSuggestWrapRef.current;
+      if (el && !el.contains(ev.target as Node)) setShowCodeSuggestions(false);
+    }
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [showCodeSuggestions]);
 
   // Body scroll lock
   useEffect(() => {
@@ -288,8 +456,13 @@ export function ProductConfigModal({
 
   // ── Whether any child variant is selected ────────────────────────────────
   const hasChildSelection = useMemo(
-    () => !!(product?.isParent && Object.values(childQtys).some((q) => q > 0)),
-    [product, childQtys],
+    () =>
+      !!(
+        !resolvedPaintProduct &&
+        product?.isParent &&
+        Object.values(childQtys).some((q) => q > 0)
+      ),
+    [resolvedPaintProduct, product, childQtys],
   );
 
   // ── Live parent price ──────────────────────────────────────────────────
@@ -329,7 +502,7 @@ export function ProductConfigModal({
   );
 
   function handleOpenManual() {
-    const u = product?.manualUrl?.trim();
+    const u = effectiveProduct?.manualUrl?.trim();
     if (u) setIsManualSheetOpen(true);
   }
 
@@ -343,9 +516,9 @@ export function ProductConfigModal({
     }
     setTouched(allTouched);
 
-    if (!isValid || !product) return;
+    if (!isValid || !product || !effectiveProduct) return;
 
-    const productForCart: Product = { ...product, productType: type };
+    const productForCart: Product = { ...effectiveProduct, productType: type };
 
     // ── 1. Always add the parent item ──────────────────────────────────────
     const config: CartItemConfig = {
@@ -359,7 +532,7 @@ export function ProductConfigModal({
         foamTotalArea != null && Number.isFinite(foamTotalArea) ? foamTotalArea : undefined,
     };
     onConfirm({
-      cartItemId: `${product.id}-${Date.now()}`,
+      cartItemId: `${productForCart.id}-${Date.now()}`,
       product: productForCart,
       quantity,
       config,
@@ -367,7 +540,7 @@ export function ProductConfigModal({
     });
 
     // ── 2. Additionally add each selected child as a separate cart row ──────
-    if (hasChildSelection && product.children) {
+    if (!resolvedPaintProduct && hasChildSelection && product.children) {
       product.children
         .slice(0, 4)
         .filter((c) => (childQtys[c.id] ?? 0) > 0)
@@ -396,10 +569,10 @@ export function ProductConfigModal({
     onClose();
   }
 
-  if (!mounted || !product) return null;
+  if (!mounted || !product || !effectiveProduct) return null;
 
-  const basePrice = getBasePrice(product);
-  const manualHref = product.manualUrl?.trim() ?? '';
+  const basePrice = getBasePrice(effectiveProduct);
+  const manualHref = effectiveProduct.manualUrl?.trim() ?? '';
   const hasManual = manualHref.length > 0;
 
   return (
@@ -454,8 +627,8 @@ export function ProductConfigModal({
               aria-label="Зургийг томруулах"
             >
               <ImageWithFallback
-                src={product.imageUrl}
-                alt={product.name}
+                src={effectiveProduct.imageUrl}
+                alt={effectiveProduct.name}
                 className="w-full h-full object-cover"
               />
 
@@ -469,7 +642,7 @@ export function ProductConfigModal({
 
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-gray-900 line-clamp-2 leading-snug">
-                {product.name}
+                {effectiveProduct.name}
               </p>
               {/* Unit price — type 3: нэгж үнэ «Бодох»-оос */}
               {type === 3 && product.is_foam_range && foamUnitPrice != null ? (
@@ -621,19 +794,63 @@ export function ProductConfigModal({
             {type === 4 && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                  Өнгө оруулах бол кодоо энд оруулна уу
+                  Code
                 </label>
                 <div className="flex items-stretch gap-2">
-                  {/* Input — 70% width */}
-                  <div className="w-[70%] flex items-center gap-2.5 border border-gray-200 bg-gray-50 focus-within:border-blue-500 focus-within:bg-white rounded-xl px-3.5 py-3 transition-colors">
-                    <Palette className="w-4 h-4 text-gray-400 shrink-0" />
-                    <input
-                      type="text"
-                      placeholder="Жишээ нь : NR9009 , BT7012"
-                      value={colorCode}
-                      onChange={(e) => setColorCode(e.target.value)}
-                      className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
-                    />
+                  <div ref={codeSuggestWrapRef} className="w-[70%] relative">
+                    <div className="flex items-center gap-2.5 border border-gray-200 bg-gray-50 focus-within:border-blue-500 focus-within:bg-white rounded-xl px-3.5 py-3 transition-colors">
+                      <Palette className="w-4 h-4 text-gray-400 shrink-0" />
+                      <input
+                        type="text"
+                        placeholder="Жишээ нь : NR9009 , BT7012"
+                        value={colorCode}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setColorCode(v);
+                          if (!v.trim()) setResolvedPaintProduct(null);
+                          touch('colorCode');
+                        }}
+                        onBlur={(e) => {
+                          void tryResolvePaintFromCode(e.target.value);
+                        }}
+                        onFocus={() => {
+                          if (codeSuggestions.length > 0) setShowCodeSuggestions(true);
+                        }}
+                        autoComplete="off"
+                        className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
+                      />
+                    </div>
+                    {showCodeSuggestions && (codeSuggestLoading || codeSuggestions.length > 0) && (
+                      <ul
+                        className="absolute left-0 right-0 top-full z-20 mt-1 max-h-40 overflow-y-auto rounded-xl border border-gray-200 bg-white py-1 shadow-md"
+                        role="listbox"
+                      >
+                        {codeSuggestLoading && codeSuggestions.length === 0 ? (
+                          <li className="px-3 py-2 text-xs text-gray-500">Ачаалж байна…</li>
+                        ) : (
+                          codeSuggestions.map((row) => (
+                            <li key={row.id}>
+                              <button
+                                type="button"
+                                className="w-full text-left px-3 py-2 text-sm text-gray-800 hover:bg-gray-50 active:bg-gray-100"
+                                onMouseDown={(ev) => ev.preventDefault()}
+                                onClick={() => {
+                                  setColorCode(row.color_code);
+                                  setShowCodeSuggestions(false);
+                                  touch('colorCode');
+                                  void tryResolvePaintFromCode(row.color_code, row.item_number);
+                                }}
+                              >
+                                {row.color_code}
+                                {row.color_name ? (
+                                  <span className="text-gray-500 text-xs"> — {row.color_name}</span>
+                                ) : null}
+                              </button>
+                            </li>
+                          ))
+                        )}
+                      </ul>
+                    )}
                   </div>
 
                   {/* Color preview box — remaining 30% */}
@@ -674,7 +891,7 @@ export function ProductConfigModal({
                 </span>
               ) : (
                 <span className="text-xs text-gray-500 shrink-0">
-                  Үлдэгдэл: <span className="font-medium text-gray-600">{product.stock}</span>
+                  Үлдэгдэл: <span className="font-medium text-gray-600">{effectiveProduct.stock}</span>
                 </span>
               )}
             </div>
@@ -708,7 +925,10 @@ export function ProductConfigModal({
           )}
 
           {/* ── Child variant selection (isParent products only) ─────────── */}
-          {product.isParent && product.children && product.children.length > 0 && (
+          {product.isParent &&
+            product.children &&
+            product.children.length > 0 &&
+            !resolvedPaintProduct && (
             <div className="border border-indigo-100 rounded-xl bg-indigo-50/30 p-3 space-y-2">
               {/* Section title — RENAMED */}
               <p className="text-xs font-semibold text-gray-700">
@@ -873,7 +1093,7 @@ export function ProductConfigModal({
           isOpen={isManualSheetOpen}
           onClose={() => setIsManualSheetOpen(false)}
           url={manualHref}
-          productName={product.name}
+          productName={effectiveProduct.name}
         />
       )}
     </div>
