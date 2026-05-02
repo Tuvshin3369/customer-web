@@ -6,10 +6,11 @@ import { getBasePrice, calculateTotal } from '../utils/priceCalc';
 import { findFoamTierForArea } from '../utils/foamRange';
 import {
   fetchGroupNumberByGroupId,
-  fetchCodedPaintItemNumberExact,
+  fetchCodedPaintByExactCode,
   resolvePaintCatalogProductForCode,
   searchCodedPaintsContaining,
   type CodedPaintSuggestionRow,
+  type CodedPaintRgb,
 } from '../utils/codedPaintPricing';
 import { ProductGallery } from './ProductGallery';
 import { ProductManualSheet } from './ProductManualSheet';
@@ -190,6 +191,8 @@ export function ProductConfigModal({
   const [codeSuggestions, setCodeSuggestions] = useState<CodedPaintSuggestionRow[]>([]);
   const [showCodeSuggestions, setShowCodeSuggestions] = useState(false);
   const [codeSuggestLoading, setCodeSuggestLoading] = useState(false);
+  /** coded_paints r,g,b — урьдчилан харах дугуй */
+  const [codedPaintPreviewRgb, setCodedPaintPreviewRgb] = useState<CodedPaintRgb | null>(null);
   /** Код ба groups.product_number зөрөх үед сагс / UI-д ашиглах бараа */
   const [resolvedPaintProduct, setResolvedPaintProduct] = useState<Product | null>(null);
 
@@ -251,6 +254,7 @@ export function ProductConfigModal({
       setShowCodeSuggestions(false);
       setCodeSuggestLoading(false);
       setResolvedPaintProduct(null);
+      setCodedPaintPreviewRgb(null);
       const eff =
         product?.is_coded_paint === true
           ? 4
@@ -355,6 +359,7 @@ export function ProductConfigModal({
       const code = exactCode.trim();
       if (!code) {
         setResolvedPaintProduct(null);
+        setCodedPaintPreviewRgb(null);
         return;
       }
       const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
@@ -365,11 +370,14 @@ export function ProductConfigModal({
       let itemNum =
         itemNumberHint != null && String(itemNumberHint).trim() ? String(itemNumberHint).trim() : '';
       if (!itemNum) {
-        itemNum = (await fetchCodedPaintItemNumberExact(url, key, paintGroupNumber, code)) ?? '';
-      }
-      if (!itemNum) {
-        setResolvedPaintProduct(null);
-        return;
+        const meta = await fetchCodedPaintByExactCode(url, key, paintGroupNumber, code);
+        if (!meta) {
+          setResolvedPaintProduct(null);
+          setCodedPaintPreviewRgb(null);
+          return;
+        }
+        itemNum = meta.item_number;
+        setCodedPaintPreviewRgb(meta.rgb);
       }
 
       try {
@@ -794,7 +802,7 @@ export function ProductConfigModal({
             {type === 4 && (
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                  Code
+                  Өнгөний код оруулах
                 </label>
                 <div className="flex items-stretch gap-2">
                   <div ref={codeSuggestWrapRef} className="w-[70%] relative">
@@ -807,6 +815,7 @@ export function ProductConfigModal({
                         onChange={(e) => {
                           const v = e.target.value;
                           setColorCode(v);
+                          setCodedPaintPreviewRgb(null);
                           if (!v.trim()) setResolvedPaintProduct(null);
                           touch('colorCode');
                         }}
@@ -836,6 +845,7 @@ export function ProductConfigModal({
                                 onMouseDown={(ev) => ev.preventDefault()}
                                 onClick={() => {
                                   setColorCode(row.color_code);
+                                  setCodedPaintPreviewRgb(row.rgb);
                                   setShowCodeSuggestions(false);
                                   touch('colorCode');
                                   void tryResolvePaintFromCode(row.color_code, row.item_number);
@@ -857,12 +867,18 @@ export function ProductConfigModal({
                   <div
                     className="flex-1 rounded-xl border transition-all overflow-hidden"
                     style={
-                      colorCode.match(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/)
-                        ? { background: colorCode, borderColor: colorCode }
-                        : { background: '#f1f5f9', borderColor: '#e2e8f0' }
+                      codedPaintPreviewRgb
+                        ? {
+                            background: `rgb(${codedPaintPreviewRgb.r},${codedPaintPreviewRgb.g},${codedPaintPreviewRgb.b})`,
+                            borderColor: '#e2e8f0',
+                          }
+                        : colorCode.match(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/)
+                          ? { background: colorCode, borderColor: colorCode }
+                          : { background: '#f1f5f9', borderColor: '#e2e8f0' }
                     }
                   >
-                    {!colorCode.match(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/) && (
+                    {!codedPaintPreviewRgb &&
+                      !colorCode.match(/^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$/) && (
                       <div className="w-full h-full flex items-center justify-center">
                         <Palette className="w-4 h-4 text-gray-300" />
                       </div>

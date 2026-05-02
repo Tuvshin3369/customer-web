@@ -301,11 +301,19 @@ export async function resolveCodedPaintPricing(
 
 // ─── Code талбар: санал хайлт (products.group_id → group_number → coded_paints) ─
 
+export interface CodedPaintRgb {
+  r: number;
+  g: number;
+  b: number;
+}
+
 export interface CodedPaintSuggestionRow {
   id: string;
   color_code: string;
   color_name: string | null;
   item_number: string;
+  /** coded_paints r,g,b — бүгд байвал л */
+  rgb: CodedPaintRgb | null;
 }
 
 /** `products.group_id` → `groups.group_number`, `groups.product_number` */
@@ -340,6 +348,19 @@ function escapeIlikePattern(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 
+function parseCodedPaintRgbFromRow(row: Record<string, unknown>): CodedPaintRgb | null {
+  const r = row.r;
+  const g = row.g;
+  const b = row.b;
+  if (r == null || g == null || b == null) return null;
+  const rn = Number(r);
+  const gn = Number(g);
+  const bn = Number(b);
+  if (!Number.isFinite(rn) || !Number.isFinite(gn) || !Number.isFinite(bn)) return null;
+  if (rn < 0 || rn > 255 || gn < 0 || gn > 255 || bn < 0 || bn > 255) return null;
+  return { r: Math.round(rn), g: Math.round(gn), b: Math.round(bn) };
+}
+
 /**
  * Оруулсан тэмдэгтийг агуулсан color_code мөрүүд, зөвхөн тухайн барааны group_number дотор.
  */
@@ -354,7 +375,7 @@ export async function searchCodedPaintsContaining(
   const safe = escapeIlikePattern(t);
   const pattern = `%${safe}%`;
   const qs = [
-    'select=id,color_code,color_name,item_number',
+    'select=id,color_code,color_name,item_number,r,g,b',
     `group_number=eq.${encodeURIComponent(groupNumber)}`,
     `color_code=ilike.${encodeURIComponent(pattern)}`,
     'order=color_code.asc',
@@ -387,31 +408,44 @@ export async function searchCodedPaintsContaining(
       color_code: cc,
       color_name: cn && cn.trim() ? cn : null,
       item_number: itemStr,
+      rgb: parseCodedPaintRgbFromRow(row),
     });
   }
   return out;
 }
 
-/** Яг таарах кодын item_number (нэг мөр). */
-export async function fetchCodedPaintItemNumberExact(
+/** Яг таарах кодын item_number болон r,g,b (бүгд null биш бол л rgb). */
+export async function fetchCodedPaintByExactCode(
   restBase: string,
   anonKey: string,
   groupNumber: string,
   colorCodeExact: string,
-): Promise<string | null> {
+): Promise<{ item_number: string; rgb: CodedPaintRgb | null } | null> {
   const code = colorCodeExact.trim();
   if (!code || !groupNumber) return null;
   const q = [
-    'select=item_number',
+    'select=item_number,r,g,b',
     `group_number=eq.${encodeURIComponent(groupNumber)}`,
     `color_code=eq.${encodeURIComponent(code)}`,
     'limit=1',
   ].join('&');
   const json = await restGetJson(restBase, anonKey, `/rest/v1/coded_paints?${q}`);
   if (!Array.isArray(json) || json.length === 0) return null;
-  const inum = (json[0] as Record<string, unknown>).item_number;
+  const row = json[0] as Record<string, unknown>;
+  const inum = row.item_number;
   if (inum == null) return null;
-  return String(inum);
+  return { item_number: String(inum), rgb: parseCodedPaintRgbFromRow(row) };
+}
+
+/** @deprecated fetchCodedPaintByExactCode ашиглана */
+export async function fetchCodedPaintItemNumberExact(
+  restBase: string,
+  anonKey: string,
+  groupNumber: string,
+  colorCodeExact: string,
+): Promise<string | null> {
+  const m = await fetchCodedPaintByExactCode(restBase, anonKey, groupNumber, colorCodeExact);
+  return m?.item_number ?? null;
 }
 
 /**
