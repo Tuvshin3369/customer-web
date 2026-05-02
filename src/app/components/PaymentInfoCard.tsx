@@ -61,19 +61,27 @@ export function PaymentInfoCard({
       <p className="text-xs font-semibold text-gray-700">Дансны мэдээлэл</p>
 
       <div className="space-y-2.5">
-        {/* Bank name */}
-        <BankRow label="Банкны нэр"   value={bankName} />
+        {/* Мөр 1: Хүлээн авагч + нэр */}
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-xs text-gray-500 shrink-0">Хүлээн авагч</p>
+          <p className="text-xs text-gray-700 font-medium text-right break-words min-w-0 flex-1 leading-snug">
+            {accountHolder}
+          </p>
+        </div>
 
-        {/* Account holder (was "Дансны нэр" → now "Хүлээн авагч") */}
-        <BankRow label="Хүлээн авагч" value={accountHolder} />
+        {/* Мөр 2: Банкны нэр */}
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-xs text-gray-500 shrink-0">Банкны нэр</p>
+          <p className="text-xs text-gray-700 font-medium text-right break-words min-w-0 flex-1 leading-snug">
+            {bankName}
+          </p>
+        </div>
 
-        {/* Account number — with copy button */}
-        <div className="flex items-center justify-between gap-3">
+        {/* Мөр 3: Дансны дугаар + account */}
+        <div className="flex items-start justify-between gap-3">
           <p className="text-xs text-gray-500 shrink-0">Дансны дугаар</p>
-          <div className="flex items-center gap-1">
-            <p className="text-xs text-gray-700 font-medium text-right break-all">
-              {accountNumber}
-            </p>
+          <div className="flex items-center justify-end gap-0.5 min-w-0 flex-1">
+            <span className="text-xs text-gray-700 font-medium text-right break-all">{accountNumber}</span>
             <button
               type="button"
               onClick={handleCopy}
