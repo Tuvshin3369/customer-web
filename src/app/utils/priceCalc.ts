@@ -14,7 +14,8 @@ export function getBasePrice(product: Product): number {
  * Formula per product type:
  *   TYPE 1 → basePrice × quantity
  *   TYPE 2 → basePrice × length × quantity
- *   TYPE 3 → basePrice × height × (width ?? 1) × quantity
+ *   TYPE 3 + is_foam_range → foamUnitPrice × quantity («Бодох»)
+ *   TYPE 3 (бусад) → basePrice × height × (width ?? 1) × quantity
  *   TYPE 4 → basePrice × quantity
  *
  * Add new types here to keep pricing logic in one place.
@@ -33,6 +34,13 @@ export function calculateTotal(
       return base * len * quantity;
     }
     case 3: {
+      if (product.is_foam_range === true) {
+        const fu = config.foamUnitPrice;
+        if (fu != null && Number.isFinite(fu)) {
+          return Math.max(0, Math.round(fu * quantity));
+        }
+        return 0;
+      }
       const h = config.height ?? 1;
       const w = config.width ?? 1;
       return base * h * w * quantity;
@@ -57,7 +65,9 @@ export function configLabel(product: Product, config: CartItemConfig): string | 
   }
   if (type === 3) {
     if (config.height != null) parts.push(`Өндөр: ${config.height}см`);
-    if (config.width  != null) parts.push(`Өргөн: ${config.width}см`);
+    if (config.width != null) parts.push(`Өргөн: ${config.width}см`);
+    if (config.foamTotalArea != null)
+      parts.push(`Талбай: ${config.foamTotalArea.toLocaleString(undefined, { maximumFractionDigits: 4 })}`);
   }
   if (type === 4 && config.colorCode) {
     parts.push(`Өнгийн код: ${config.colorCode}`);

@@ -24,7 +24,7 @@ import { ForgotPasswordModal } from './components/ForgotPasswordModal';
 import { GuestOrdersPage } from './components/GuestOrdersPage';
 import { JobsPage } from './components/JobsPage';
 import { ApplicationPage } from './components/ApplicationPage';
-import { Product, CartItem, ChildProduct } from './types';
+import { Product, CartItem, ChildProduct, FoamRangeRow } from './types';
 import { calculateTotal } from './utils/priceCalc';
 
 const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
@@ -150,6 +150,51 @@ async function fetchGoodsBalanceTotals(
   return totals;
 }
 
+function mapFoamRangeApiRow(raw: Record<string, unknown>): FoamRangeRow | null {
+  const pr = numField(raw.price, NaN);
+  if (!Number.isFinite(pr)) return null;
+  const min = numField(raw.min_amount, 0);
+  const maxRaw = raw.max_amount;
+  const max =
+    maxRaw == null || maxRaw === ''
+      ? Number.POSITIVE_INFINITY
+      : numField(maxRaw, Number.POSITIVE_INFINITY);
+  return { min_amount: min, max_amount: max, price: pr };
+}
+
+/**
+ * foam_range: дэлгүүр бүрт нэг интервалын жагсаалт (store_id).
+ * Хүснэгтэнд product_id байхгүй тохиолдолд иймэрхүү татаж ашиглана.
+ */
+async function fetchFoamRangesForStore(
+  restBase: string,
+  anonKey: string,
+  storeId: string,
+): Promise<FoamRangeRow[]> {
+  if (!storeId) return [];
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    Accept: 'application/json',
+  };
+  const query = new URLSearchParams({
+    select: 'min_amount,max_amount,price',
+    store_id: `eq.${storeId}`,
+  });
+  try {
+    const res = await fetch(`${restBase}/rest/v1/foam_range?${query.toString()}`, { headers });
+    const json = await parseJsonSafely(res);
+    if (!res.ok || !Array.isArray(json)) return [];
+    const rows = (json as Record<string, unknown>[])
+      .map(mapFoamRangeApiRow)
+      .filter((x): x is FoamRangeRow => x != null);
+    rows.sort((a, b) => a.min_amount - b.min_amount);
+    return rows;
+  } catch {
+    return [];
+  }
+}
+
 const RELATED_PRODUCT_KEYS = [
   'related_product_1_id',
   'related_product_2_id',
@@ -158,7 +203,7 @@ const RELATED_PRODUCT_KEYS = [
 ] as const;
 
 const PRODUCTS_LIST_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function mapRowToChildProduct(
   row: Record<string, unknown>,
@@ -565,6 +610,14 @@ export default function App() {
             is_coded_paint: row.is_coded_paint === true,
             is_foam_range: row.is_foam_range === true,
             is_calculate_length: row.is_calculate_length === true,
+            ratio: (() => {
+              const r = numField(row.ratio, 0);
+              return r > 0 ? r : undefined;
+            })(),
+            waste: (() => {
+              const w = numField(row.waste, 0);
+              return w > 0 ? w : undefined;
+            })(),
             name: nm,
             category: 'Бусад',
             price: retail,
@@ -580,7 +633,15 @@ export default function App() {
           } satisfies Product;
         })
         .filter((p) => p.id.length > 0 && p.name.length > 0);
-      setProducts(mapped);
+
+      const hasFoamProduct = mapped.some((p) => p.is_foam_range);
+      const storeFoamRanges = hasFoamProduct
+        ? await fetchFoamRangesForStore(restBase, supabaseAnonKey, selectedStoreId)
+        : [];
+      const withFoam: Product[] = mapped.map((p) =>
+        p.is_foam_range ? { ...p, foamRange: storeFoamRanges } : p,
+      );
+      setProducts(withFoam);
     } catch (err) {
       console.error('fetchProductsForBrand error:', err);
       setProducts([]);

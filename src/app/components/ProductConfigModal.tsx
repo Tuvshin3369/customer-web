@@ -3,6 +3,7 @@ import { X, Plus, Minus, ShoppingCart, Ruler, Maximize2, Palette, FileText } fro
 import { Product, ProductType, CartItem, CartItemConfig } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { getBasePrice, calculateTotal } from '../utils/priceCalc';
+import { findFoamTierForArea } from '../utils/foamRange';
 import { ProductGallery } from './ProductGallery';
 import { ProductManualSheet } from './ProductManualSheet';
 
@@ -11,6 +12,13 @@ interface ProductConfigModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (item: CartItem) => void;
+}
+
+/** is_foam_range: өргөний санал — өндөр × ratio */
+function formatSuggestedWidthCm(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const x = Math.round(n * 100) / 100;
+  return Number.isInteger(x) ? String(x) : x.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 // ─── Shared numeric input row (+ / - + keyboard) ─────────────────────────────
@@ -138,10 +146,16 @@ export function ProductConfigModal({
   const [height,    setHeight]    = useState('');
   const [width,     setWidth]     = useState('');
   const [colorCode, setColorCode] = useState('');
+  /** is_foam_range: «Бодох»-оор — нэгж үнэ (1 ширхэг, ₮) */
+  const [foamUnitPrice, setFoamUnitPrice] = useState<number | null>(null);
+  const [foamTotalArea, setFoamTotalArea] = useState<number | null>(null);
+  const [foamCalcError, setFoamCalcError] = useState<string | null>(null);
 
   // ── Refs for auto-focus ─────────────────────────────────────────────────
   const heightInputRef = useRef<HTMLInputElement>(null);
   const lengthInputRef = useRef<HTMLInputElement>(null);
+  /** true бол өргөнийг гараар зассан — өндөр өөрчлөхөд автомат саналыг давтахгүй */
+  const widthTouchedRef = useRef(false);
 
   const [isManualSheetOpen, setIsManualSheetOpen] = useState(false);
 
@@ -171,6 +185,12 @@ export function ProductConfigModal({
     return { ...product, productType: type };
   }, [product, type]);
 
+  const foamRatio = useMemo((): number | null => {
+    if (!product || product.is_foam_range !== true) return null;
+    const r = product.ratio;
+    return typeof r === 'number' && r > 0 && Number.isFinite(r) ? r : null;
+  }, [product]);
+
   // Derive image list — always at least the primary imageUrl
   const productImages = product
     ? (product.images && product.images.length > 0 ? product.images : [product.imageUrl])
@@ -185,6 +205,10 @@ export function ProductConfigModal({
       // Reset form on every open
       setQuantity(1);
       setLength(''); setHeight(''); setWidth(''); setColorCode('');
+      setFoamUnitPrice(null);
+      setFoamTotalArea(null);
+      setFoamCalcError(null);
+      widthTouchedRef.current = false;
       setErrors({}); setTouched({});
       setIsManualSheetOpen(false);
       setGalleryIndex(0);
@@ -246,9 +270,14 @@ export function ProductConfigModal({
     if (type === 3) {
       if (!height.trim() || parseFloat(height) <= 0)
         e.height = 'Өндрийг оруулна уу.';
+      if (product?.is_foam_range === true) {
+        if (foamUnitPrice == null || !Number.isFinite(foamUnitPrice)) {
+          e.foam = '«Бодох» дарж нэгж үнэ тооцоолно уу.';
+        }
+      }
     }
     return e;
-  }, [type, length, height]);
+  }, [type, length, height, product?.is_foam_range, foamUnitPrice]);
 
   const currentErrors = useMemo(() => validate(), [validate]);
   const isValid = Object.keys(currentErrors).length === 0;
@@ -271,9 +300,17 @@ export function ProductConfigModal({
       height:    height    ? parseFloat(height)    : undefined,
       width:     width     ? parseFloat(width)     : undefined,
       colorCode: colorCode || undefined,
+      foamUnitPrice:
+        product?.is_foam_range === true && foamUnitPrice != null && Number.isFinite(foamUnitPrice)
+          ? Math.round(foamUnitPrice)
+          : undefined,
+      foamTotalArea:
+        product?.is_foam_range === true && foamTotalArea != null && Number.isFinite(foamTotalArea)
+          ? foamTotalArea
+          : undefined,
     };
     return calculateTotal(productForPricing, config, quantity);
-  }, [productForPricing, length, height, width, colorCode, quantity]);
+  }, [productForPricing, product?.is_foam_range, length, height, width, colorCode, quantity, foamUnitPrice, foamTotalArea]);
 
   // ── Child subtotal — Σ (child qty × child price) for selected rows ───────
   const childTotal = useMemo(
@@ -300,7 +337,10 @@ export function ProductConfigModal({
   function handleConfirm() {
     const allTouched: Record<string, boolean> = {};
     if (type === 2) allTouched.length = true;
-    if (type === 3) allTouched.height = true;
+    if (type === 3) {
+      allTouched.height = true;
+      if (product?.is_foam_range === true) allTouched.foam = true;
+    }
     setTouched(allTouched);
 
     if (!isValid || !product) return;
@@ -313,6 +353,10 @@ export function ProductConfigModal({
       height:    height    ? parseFloat(height)    : undefined,
       width:     width     ? parseFloat(width)     : undefined,
       colorCode: colorCode.trim() || undefined,
+      foamUnitPrice:
+        foamUnitPrice != null && Number.isFinite(foamUnitPrice) ? Math.round(foamUnitPrice) : undefined,
+      foamTotalArea:
+        foamTotalArea != null && Number.isFinite(foamTotalArea) ? foamTotalArea : undefined,
     };
     onConfirm({
       cartItemId: `${product.id}-${Date.now()}`,
@@ -427,13 +471,17 @@ export function ProductConfigModal({
               <p className="text-sm font-semibold text-gray-900 line-clamp-2 leading-snug">
                 {product.name}
               </p>
-              {/* Unit price — hidden for type 3 (no fixed price until dimensions entered) */}
-              {type !== 3 && (
+              {/* Unit price — type 3: нэгж үнэ «Бодох»-оос */}
+              {type === 3 && product.is_foam_range && foamUnitPrice != null ? (
+                <p className="text-sm font-semibold text-blue-600 mt-1">
+                  Нэгж үнэ: ₮{Math.round(foamUnitPrice).toLocaleString()}
+                </p>
+              ) : type !== 3 ? (
                 <p className="text-sm font-semibold text-blue-600 mt-1">
                   ₮{basePrice.toLocaleString()}
                   {type === 2 && <span className="text-[11px] font-normal text-gray-400 ml-0.5">/ см</span>}
                 </p>
-              )}
+              ) : null}
             </div>
           </div>
 
@@ -462,7 +510,18 @@ export function ProductConfigModal({
                   label="Өндөр (см)"
                   unit="См"
                   value={height}
-                  onChange={(v) => { setHeight(v); touch('height'); }}
+                  onChange={(v) => {
+                    setHeight(v);
+                    touch('height');
+                    setFoamUnitPrice(null);
+                    setFoamTotalArea(null);
+                    setFoamCalcError(null);
+                    if (product?.is_foam_range === true && foamRatio != null && !widthTouchedRef.current) {
+                      const h = parseFloat(v);
+                      if (!isNaN(h) && h > 0) setWidth(formatSuggestedWidthCm(h * foamRatio));
+                      else if (!v.trim()) setWidth('');
+                    }
+                  }}
                   required
                   error={touched.height ? currentErrors.height : undefined}
                   icon={<Maximize2 className="w-4 h-4" />}
@@ -483,19 +542,77 @@ export function ProductConfigModal({
                         inputMode="decimal"
                         placeholder="жишээ: 2.0"
                         value={width}
-                        onChange={(e) => setWidth(e.target.value.replace(/[^0-9.]/g, ''))}
+                        onChange={(e) => {
+                          widthTouchedRef.current = true;
+                          setFoamUnitPrice(null);
+                          setFoamTotalArea(null);
+                          setFoamCalcError(null);
+                          setWidth(e.target.value.replace(/[^0-9.]/g, ''));
+                        }}
                         className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none"
                       />
                       <span className="text-xs text-gray-400 shrink-0">См</span>
                     </div>
                     <button
                       type="button"
-                      onClick={() => touch('height')}
+                      onClick={() => {
+                        touch('height');
+                        setFoamCalcError(null);
+                        if (product?.is_foam_range !== true) return;
+
+                        const h = parseFloat(height);
+                        if (isNaN(h) || h <= 0) {
+                          setFoamCalcError('Өндрийг зөв оруулна уу.');
+                          return;
+                        }
+
+                        let w = parseFloat(width);
+                        if (isNaN(w) || w <= 0) {
+                          if (foamRatio != null) {
+                            w = h * foamRatio;
+                            widthTouchedRef.current = false;
+                            setWidth(formatSuggestedWidthCm(w));
+                          } else {
+                            setFoamCalcError('Өргөнийг оруулна уу.');
+                            return;
+                          }
+                        }
+
+                        const waste = product.waste;
+                        if (waste == null || !Number.isFinite(waste) || waste <= 0) {
+                          setFoamCalcError('Барааны waste коэффициент тохируулаагүй байна.');
+                          return;
+                        }
+
+                        const ranges = product.foamRange ?? [];
+                        if (ranges.length === 0) {
+                          setFoamCalcError('foam_range интервал олдсонгүй.');
+                          return;
+                        }
+
+                        const totalArea = h * w * waste;
+                        const tier = findFoamTierForArea(ranges, totalArea);
+                        if (!tier) {
+                          setFoamCalcError('Нийт талбайд тохирох интервал олдсонгүй.');
+                          setFoamUnitPrice(null);
+                          setFoamTotalArea(null);
+                          return;
+                        }
+
+                        const unit = Math.round(totalArea * tier.price);
+                        setFoamTotalArea(totalArea);
+                        setFoamUnitPrice(unit);
+                      }}
                       className="flex-1 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold transition-colors"
                     >
                       Бодох
                     </button>
                   </div>
+                  {(foamCalcError != null || (touched.foam && currentErrors.foam)) && (
+                    <p className="text-xs text-red-500 mt-1.5 pl-0.5">
+                      {foamCalcError ?? currentErrors.foam}
+                    </p>
+                  )}
                 </div>
               </>
             )}

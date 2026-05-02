@@ -5,6 +5,15 @@
 // 4 = Color Code (text) + Quantity
 export type ProductType = 1 | 2 | 3 | 4;
 
+/** foam_range хүснэгт — барааны нийт талбайн интервал / нэгж хувь */
+export interface FoamRangeRow {
+  min_amount: number;
+  /** Дээд хязгааргүй бол Number.POSITIVE_INFINITY */
+  max_amount: number;
+  /** Нэгж үнэнд: нийт_талбай × price */
+  price: number;
+}
+
 // ─── Child Product ────────────────────────────────────────────────────────────
 // Simplified product variant under a parent product.
 export interface ChildProduct {
@@ -41,6 +50,12 @@ export interface Product {
   is_coded_paint?: boolean;
   /** true бол өндөр/өргөн (productType 3-тай ижил) */
   is_foam_range?: boolean;
+  /** is_foam_range: санал болгох өргөн = өндөр × ratio (products.ratio) */
+  ratio?: number;
+  /** is_foam_range: нийт талбай = өндөр × өргөн × waste */
+  waste?: number;
+  /** is_foam_range: foam_range хүснэгтээс (min_amount, max_amount, price) */
+  foamRange?: FoamRangeRow[];
   /** true бол урт (productType 2-той ижил) */
   is_calculate_length?: boolean;
   // ── Parent product fields ─────────────────────────────────────────────────
@@ -56,6 +71,10 @@ export interface CartItemConfig {
   height?: number;    // TYPE 3
   width?: number;     // TYPE 3 (optional)
   colorCode?: string; // TYPE 4
+  /** is_foam_range: «Бодох»-ийн дараах нэгж үнэ (1 ширхэг) */
+  foamUnitPrice?: number;
+  /** is_foam_range: өндөр×өргөн×waste */
+  foamTotalArea?: number;
 }
 
 // ─── Cart Item ────────────────────────────────────────────────────────────────
