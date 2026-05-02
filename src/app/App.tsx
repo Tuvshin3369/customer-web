@@ -1057,10 +1057,12 @@ export default function App() {
       />
       <CheckoutModal
         isOpen={isCheckoutOpen}
-        onClose={() => setIsCheckoutOpen(false)
-        }
+        onClose={() => setIsCheckoutOpen(false)}
         items={cartItems}
         grandTotal={cartGrandTotal}
+        isLoggedIn={isLoggedIn}
+        customerPhone={loggedInUserPhone}
+        customerGoogleId={loggedInUserGoogleId}
       />
       <CarModal
         isOpen={isCarModalOpen}

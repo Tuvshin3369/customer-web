@@ -10,10 +10,45 @@ import { MapPickerModal, PickedLocation } from './MapPickerModal';
 import { calculateDistanceKm } from '../utils/haversine';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { PaymentInfoCard } from './PaymentInfoCard';
+import {
+  fetchCustomerProfileByPhone,
+  fetchCustomerProfileByGoogleId,
+} from '../lib/customersRegister';
 
-// ─── Static bank details ──────────────────────────────────────────────────────
-const BANK_NAME    = 'Хаан Банк';
-const BANK_ACCOUNT = '5001234567';
+function normalizePhoneDigits(raw: unknown): string | null {
+  if (raw == null) return null;
+  if (typeof raw === 'bigint') {
+    const s = raw.toString();
+    return /^\d+$/.test(s) ? s : null;
+  }
+  if (typeof raw === 'number' && Number.isFinite(raw)) {
+    if (!Number.isInteger(raw) || raw < 0) return null;
+    const s = String(Math.trunc(raw));
+    return s.length > 0 && /^\d+$/.test(s) ? s : null;
+  }
+  if (typeof raw === 'string') {
+    const d = raw.trim().replace(/\D/g, '');
+    return d.length > 0 ? d : null;
+  }
+  return null;
+}
+
+function formatPhoneForDisplay(digits: string | null): string {
+  if (!digits) return '';
+  const d = digits.replace(/\D/g, '');
+  if (d.length === 8) return `${d.slice(0, 4)} ${d.slice(4)}`;
+  return d;
+}
+
+async function parseRestJson(res: Response): Promise<unknown> {
+  const raw = await res.text();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DeliveryType  = 'pickup' | 'taxi' | 'delivery';
@@ -29,6 +64,17 @@ interface StoreConfig {
   base_price_per_km:       number;
   min_delivery_fee:        number;
   free_delivery_threshold: number;
+}
+
+/** Гол салбар — төлбөрийн данс, утас */
+interface MainBranchPaymentRow {
+  phoneDigits: string | null;
+  company_bank: string;
+  company_name: string;
+  company_account: string;
+  personal_bank: string;
+  personal_name: string;
+  personal_account: string;
 }
 
 interface NearestBranchResult {
@@ -48,6 +94,10 @@ export interface CheckoutModalProps {
   onClose:    () => void;
   items:      CartItem[];
   grandTotal: number;
+  /** Төлбөрийн данс: байгууллага vs хувь хүн */
+  isLoggedIn?: boolean;
+  customerPhone?: number | null;
+  customerGoogleId?: string | null;
 }
 
 // ─── Step meta ────────────────────────────────────────────────────────────────
@@ -58,7 +108,15 @@ const STEP_LABELS: Record<WizardStep, string> = {
 };
 
 // ─── Main component ───────────────────────────────────────────────────────────
-export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutModalProps) {
+export function CheckoutModal({
+  isOpen,
+  onClose,
+  items,
+  grandTotal,
+  isLoggedIn = false,
+  customerPhone = null,
+  customerGoogleId = null,
+}: CheckoutModalProps) {
 
   // ── Derive store_id from cart (all items share the same store) ─────────────
   const storeId: string | null = items[0]?.product?.store_id ?? null;
@@ -91,6 +149,14 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
   const [store,          setStore]          = useState<StoreConfig | null>(null);
   const [isLoadingStore, setIsLoadingStore] = useState(false);
   const [storeError,     setStoreError]     = useState('');
+
+  // Төлбөрийн алхам — stores.store_rules, гол салбарын данс/утас (REST)
+  const [storeRulesText, setStoreRulesText] = useState<string | null>(null);
+  const [mainBranchPayment, setMainBranchPayment] = useState<MainBranchPaymentRow | null>(null);
+  const [customerRegisterDb, setCustomerRegisterDb] = useState<string | null>(null);
+  const [paymentDisplayError, setPaymentDisplayError] = useState('');
+  const [isLoadingPaymentDisplay, setIsLoadingPaymentDisplay] = useState(false);
+  const [rulesSheetOpen, setRulesSheetOpen] = useState(false);
 
   // ── Step 1 — ХҮЛЭЭН АВАХ ─────────────────────────────────────────────────
   const [phone,        setPhone]        = useState('');
@@ -166,6 +232,34 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
 
   const finalTotal = useMemo(() => grandTotal + deliveryFee, [grandTotal, deliveryFee]);
 
+  const paymentBankDetails = useMemo(() => {
+    const m = mainBranchPayment;
+    const hasCompanyReg =
+      isLoggedIn && (customerRegisterDb?.trim() ?? '').length > 0;
+    if (!m) {
+      return {
+        bankName: '—',
+        accountHolder: '—',
+        accountNumber: '—',
+        mainPhoneDigits: null as string | null,
+      };
+    }
+    if (hasCompanyReg) {
+      return {
+        bankName: m.company_bank || '—',
+        accountHolder: m.company_name || '—',
+        accountNumber: m.company_account || '—',
+        mainPhoneDigits: m.phoneDigits,
+      };
+    }
+    return {
+      bankName: m.personal_bank || '—',
+      accountHolder: m.personal_name || '—',
+      accountNumber: m.personal_account || '—',
+      mainPhoneDigits: m.phoneDigits,
+    };
+  }, [isLoggedIn, customerRegisterDb, mainBranchPayment]);
+
   // ── Fetch branches ───────────────────────────────────────────────────────
   async function fetchBranches() {
     setIsLoadingBranches(true);
@@ -207,6 +301,85 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
     }
   }
 
+  async function fetchPaymentDisplayContext() {
+    if (!storeId) {
+      setStoreRulesText(null);
+      setMainBranchPayment(null);
+      setPaymentDisplayError('');
+      return;
+    }
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!supabaseUrl?.trim() || !supabaseAnonKey?.trim()) {
+      setPaymentDisplayError('Supabase тохиргоо дутуу байна.');
+      return;
+    }
+    const restBase = supabaseUrl.replace(/\/$/, '');
+    const headers = {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${supabaseAnonKey}`,
+      Accept: 'application/json',
+    };
+    setIsLoadingPaymentDisplay(true);
+    setPaymentDisplayError('');
+    try {
+      const sq = new URLSearchParams({
+        select: 'store_rules',
+        id: `eq.${storeId}`,
+        limit: '1',
+      });
+      const sres = await fetch(`${restBase}/rest/v1/stores?${sq}`, { headers });
+      const sjson = await parseRestJson(sres);
+      if (sres.ok && Array.isArray(sjson) && sjson.length > 0) {
+        const raw = (sjson[0] as Record<string, unknown>).store_rules;
+        const t = typeof raw === 'string' ? raw.trim() : raw != null ? String(raw).trim() : '';
+        setStoreRulesText(t.length > 0 ? t : null);
+      } else {
+        setStoreRulesText(null);
+      }
+
+      const bq = new URLSearchParams({
+        select:
+          'phone_1,company_bank,company_name,company_account,personal_bank,personal_name,personal_account',
+        store_id: `eq.${storeId}`,
+        is_main_branch: 'eq.true',
+        limit: '1',
+      });
+      const bres = await fetch(`${restBase}/rest/v1/branches?${bq}`, { headers });
+      const bjson = await parseRestJson(bres);
+      if (!bres.ok) {
+        throw new Error(
+          (bjson as { message?: string } | null)?.message || `Салбар HTTP ${bres.status}`,
+        );
+      }
+      if (Array.isArray(bjson) && bjson.length > 0) {
+        const row = bjson[0] as Record<string, unknown>;
+        const norm = (v: unknown) => {
+          if (v == null) return '';
+          return String(v).trim();
+        };
+        setMainBranchPayment({
+          phoneDigits: normalizePhoneDigits(row.phone_1),
+          company_bank: norm(row.company_bank),
+          company_name: norm(row.company_name),
+          company_account: norm(row.company_account),
+          personal_bank: norm(row.personal_bank),
+          personal_name: norm(row.personal_name),
+          personal_account: norm(row.personal_account),
+        });
+      } else {
+        setMainBranchPayment(null);
+      }
+    } catch (err: unknown) {
+      console.error('fetchPaymentDisplayContext error:', err);
+      setPaymentDisplayError(err instanceof Error ? err.message : 'Төлбөрийн мэдээлэл ачаалахад алдаа');
+      setStoreRulesText(null);
+      setMainBranchPayment(null);
+    } finally {
+      setIsLoadingPaymentDisplay(false);
+    }
+  }
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (isOpen) {
@@ -221,8 +394,14 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
       setIsMapOpen(false);
       setSubmitted(false);
       setOrgExpanded(false);
+      setRulesSheetOpen(false);
+      setStoreRulesText(null);
+      setMainBranchPayment(null);
+      setCustomerRegisterDb(null);
+      setPaymentDisplayError('');
       fetchBranches();
       fetchStore();
+      fetchPaymentDisplayContext();
       // Auto-focus phone field after the slide-up animation completes
       const focusTimer = setTimeout(() => phoneInputRef.current?.focus(), 420);
       return () => clearTimeout(focusTimer);
@@ -233,6 +412,38 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setCustomerRegisterDb(null);
+    if (!isLoggedIn) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const gid = customerGoogleId?.trim() ?? '';
+        if (gid) {
+          const s = await fetchCustomerProfileByGoogleId(gid);
+          if (!cancelled) {
+            const r = s.register?.trim() ?? '';
+            setCustomerRegisterDb(r.length > 0 ? r : null);
+          }
+          return;
+        }
+        if (customerPhone != null && Number.isFinite(customerPhone) && customerPhone > 0) {
+          const s = await fetchCustomerProfileByPhone(customerPhone);
+          if (!cancelled) {
+            const r = s.register?.trim() ?? '';
+            setCustomerRegisterDb(r.length > 0 ? r : null);
+          }
+        }
+      } catch {
+        if (!cancelled) setCustomerRegisterDb(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isLoggedIn, customerGoogleId, customerPhone]);
 
   // Body scroll lock
   useEffect(() => {
@@ -701,25 +912,45 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
               ══════════════════════════════════════════════════════════ */
               <div className="px-5 pt-2 pb-6 space-y-4">
 
+                {paymentDisplayError && (
+                  <div className="flex items-center gap-2.5 bg-amber-50 border border-amber-200 rounded-xl px-3.5 py-2.5">
+                    <AlertCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                    <p className="text-xs text-amber-800 leading-snug">{paymentDisplayError}</p>
+                  </div>
+                )}
+
+                {isLoadingPaymentDisplay && (
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                    Төлбөрийн мэдээлэл ачаалж байна…
+                  </div>
+                )}
+
                 {/* Contact message */}
                 <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3.5 space-y-3">
                   <p className="text-sm text-gray-700 leading-relaxed">
                     Захиалга өгсөнд баярлалаа. Танд асуух зүйл эсвэл захиалгаа илгээж, доорх дансаар төлбөрөө төлсөн бол утсаар холбогдоорой.
                   </p>
-                  <a
-                    href="tel:99883366"
-                    className="flex items-center justify-center gap-2 w-full bg-green-500 hover:bg-green-600 active:bg-green-700 text-white text-sm font-semibold py-3 rounded-xl transition-colors shadow-sm"
-                  >
-                    <Phone className="w-4 h-4" />
-                    Залгах 99883366
-                  </a>
+                  {paymentBankDetails.mainPhoneDigits ? (
+                    <a
+                      href={`tel:${paymentBankDetails.mainPhoneDigits}`}
+                      className="flex items-center justify-center gap-2 w-full bg-green-500 hover:bg-green-600 active:bg-green-700 text-white text-sm font-semibold py-3 rounded-xl transition-colors shadow-sm"
+                    >
+                      <Phone className="w-4 h-4" />
+                      Залгах {formatPhoneForDisplay(paymentBankDetails.mainPhoneDigits)}
+                    </a>
+                  ) : (
+                    <p className="text-xs text-center text-gray-500">
+                      Гол салбарын утас тохируулаагүй байна.
+                    </p>
+                  )}
                 </div>
 
-                {/* Bank details — always shown */}
+                {/* Bank details — гол салбарын бодит данс */}
                 <PaymentInfoCard
-                  bankName={BANK_NAME}
-                  accountHolder="Modern UI LLC"
-                  accountNumber={BANK_ACCOUNT}
+                  bankName={paymentBankDetails.bankName}
+                  accountHolder={paymentBankDetails.accountHolder}
+                  accountNumber={paymentBankDetails.accountNumber}
                   transferNote={phone || undefined}
                   showTransferWarning={!phone}
                 />
@@ -816,6 +1047,7 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
                   className="self-start bg-transparent border-0 p-0 text-blue-600
                              cursor-pointer hover:underline"
                   style={{ fontSize: 13 }}
+                  onClick={() => setRulesSheetOpen(true)}
                 >
                   Үйлчилгээний журам
                 </button>
@@ -843,6 +1075,37 @@ export function CheckoutModal({ isOpen, onClose, items, grandTotal }: CheckoutMo
           </div>
         )}
       </div>
+
+      {/* Үйлчилгээний журам — stores.store_rules */}
+      {rulesSheetOpen && (
+        <div className="fixed inset-0 z-[190] flex items-end md:items-center justify-center md:p-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50 backdrop-blur-[1px]"
+            aria-label="Хаах"
+            onClick={() => setRulesSheetOpen(false)}
+          />
+          <div className="relative z-10 w-full max-w-md max-h-[min(85vh,560px)] md:rounded-2xl rounded-t-2xl bg-white shadow-2xl flex flex-col md:mt-0 mt-auto">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0">
+              <h3 className="text-sm font-semibold text-gray-900">Үйлчилгээний журам</h3>
+              <button
+                type="button"
+                onClick={() => setRulesSheetOpen(false)}
+                className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200"
+              >
+                <X className="w-4 h-4 text-gray-500" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                {storeRulesText?.trim()
+                  ? storeRulesText
+                  : 'Агуулга тохируулаагүй байна. (stores.store_rules)'}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Map picker — z-[160] floats above checkout z-[140] */}
       <MapPickerModal
