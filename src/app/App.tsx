@@ -26,6 +26,7 @@ import { JobsPage } from './components/JobsPage';
 import { ApplicationPage } from './components/ApplicationPage';
 import { Product, CartItem, ChildProduct, FoamRangeRow } from './types';
 import { calculateTotal } from './utils/priceCalc';
+import { DELIVERY_SERVICE_CART_ITEM_ID } from './lib/deliveryServiceCart';
 
 const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
 
@@ -203,7 +204,7 @@ const RELATED_PRODUCT_KEYS = [
 ] as const;
 
 const PRODUCTS_LIST_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,is_service,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function mapRowToChildProduct(
   row: Record<string, unknown>,
@@ -282,6 +283,7 @@ export default function App() {
   const [isRegisterModalOpen,  setIsRegisterModalOpen]  = useState(false);
   const [isCartOpen,           setIsCartOpen]           = useState(false);
   const [isCheckoutOpen,       setIsCheckoutOpen]       = useState(false);
+  const [deliveryUiCancelNonce, setDeliveryUiCancelNonce] = useState(0);
   const [isCarModalOpen,       setIsCarModalOpen]       = useState(false);
   const [isUserMenuOpen,       setIsUserMenuOpen]       = useState(false);
   const [isProfileOpen,        setIsProfileOpen]        = useState(false);
@@ -622,6 +624,7 @@ export default function App() {
             brandId: row.brand_id != null && row.brand_id !== '' ? String(row.brand_id) : undefined,
             servicePrice: numField(row.service_price, 0),
             is_pigment: row.is_pigment === true,
+            is_service: row.is_service === true,
             loadingCoefficient: (() => {
               const lc = numField(row.loading_coefficient, 0);
               return lc > 0 ? lc : undefined;
@@ -759,7 +762,10 @@ export default function App() {
   const [parentProduct, setParentProduct] = useState<Product | null>(null);
 
   const cartCount = useMemo(
-    () => cartItems.reduce((sum, item) => sum + item.quantity, 0),
+    () =>
+      cartItems
+        .filter((item) => !item.product.is_service)
+        .reduce((sum, item) => sum + item.quantity, 0),
     [cartItems],
   );
 
@@ -772,6 +778,24 @@ export default function App() {
     setIsCartOpen(false);
     setTimeout(() => setIsCheckoutOpen(true), 120);
   }
+
+  const handleSyncDeliveryServiceLine = useCallback((item: CartItem | null) => {
+    setCartItems((prev) => {
+      const rest = prev.filter((i) => i.cartItemId !== DELIVERY_SERVICE_CART_ITEM_ID);
+      if (!item) return rest;
+      const existing = prev.find((i) => i.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID);
+      const bp = (p: Product) => p.basePrice ?? p.price;
+      if (
+        existing &&
+        existing.quantity === item.quantity &&
+        existing.totalPrice === item.totalPrice &&
+        bp(existing.product) === bp(item.product)
+      ) {
+        return prev;
+      }
+      return [...rest, item];
+    });
+  }, []);
 
   function handleConfigureProduct(product: Product) { setConfigProduct(product); }
 
@@ -797,6 +821,7 @@ export default function App() {
     setCartItems(prev =>
       prev.map(item => {
         if (item.cartItemId !== cartItemId) return item;
+        if (item.product.is_service) return item;
         return { ...item, quantity, totalPrice: calculateTotal(item.product, item.config, quantity) };
       }),
     );
@@ -804,10 +829,16 @@ export default function App() {
 
   function handleRemoveItem(cartItemId: string) {
     setCartItems((prev) => {
+      const removed = prev.find((item) => item.cartItemId === cartItemId);
+      const isService =
+        removed?.product.is_service === true || cartItemId === DELIVERY_SERVICE_CART_ITEM_ID;
       const next = prev.filter((item) => item.cartItemId !== cartItemId);
       if (next.length === 0) {
         setActiveCartStoreId(null);
         setLockedStoreDisplayName(null);
+      }
+      if (isService) {
+        queueMicrotask(() => setDeliveryUiCancelNonce((n) => n + 1));
       }
       return next;
     });
@@ -841,11 +872,13 @@ export default function App() {
 
   const productsLabeled = useMemo(
     () =>
-      products.map((p) => {
-        const cid = p.categoryId != null && p.categoryId !== '' ? String(p.categoryId) : '';
-        const label = cid && categoryNameById[cid] ? categoryNameById[cid] : 'Бусад';
-        return { ...p, category: label };
-      }),
+      products
+        .filter((p) => !p.is_service)
+        .map((p) => {
+          const cid = p.categoryId != null && p.categoryId !== '' ? String(p.categoryId) : '';
+          const label = cid && categoryNameById[cid] ? categoryNameById[cid] : 'Бусад';
+          return { ...p, category: label };
+        }),
     [products, categoryNameById],
   );
 
@@ -1043,9 +1076,13 @@ export default function App() {
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
         onClearCart={() => {
+          const hadService = cartItems.some(
+            (i) => i.product.is_service === true || i.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID,
+          );
           setCartItems([]);
           setActiveCartStoreId(null);
           setLockedStoreDisplayName(null);
+          if (hadService) setDeliveryUiCancelNonce((n) => n + 1);
           // Close every page/modal so the user lands on Home
           setIsCartOpen(false);
           setIsProfileOpen(false);
@@ -1064,6 +1101,8 @@ export default function App() {
         onClose={() => setIsCheckoutOpen(false)}
         items={cartItems}
         grandTotal={cartGrandTotal}
+        onSyncDeliveryServiceLine={handleSyncDeliveryServiceLine}
+        deliveryUiCancelNonce={deliveryUiCancelNonce}
         isLoggedIn={isLoggedIn}
         customerPhone={loggedInUserPhone}
         customerGoogleId={loggedInUserGoogleId}

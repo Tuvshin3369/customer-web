@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import { CartItem } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
-import { configLabel, calculateTotal } from '../utils/priceCalc';
+import { configLabel, calculateTotal, getBasePrice } from '../utils/priceCalc';
 import { ProductGallery } from './ProductGallery';
 
 interface CartDrawerProps {
@@ -96,7 +96,15 @@ export function CartDrawer({
     [items],
   );
   const totalCount = useMemo(
-    () => items.reduce((sum, item) => sum + item.quantity, 0),
+    () =>
+      items
+        .filter((item) => !item.product.is_service)
+        .reduce((sum, item) => sum + item.quantity, 0),
+    [items],
+  );
+
+  const physicalLineTypes = useMemo(
+    () => items.filter((item) => !item.product.is_service).length,
     [items],
   );
 
@@ -176,7 +184,13 @@ export function CartDrawer({
           <>
             {/* Item list — overscroll-contain keeps touches inside the drawer on iOS */}
             <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
-              {items.map((item) => (
+              {[...items]
+                .sort((a, b) => {
+                  const sa = a.product.is_service ? 1 : 0;
+                  const sb = b.product.is_service ? 1 : 0;
+                  return sa - sb;
+                })
+                .map((item) => (
                 <CartItemCard
                   key={item.cartItemId}
                   item={item}
@@ -211,7 +225,7 @@ export function CartDrawer({
                     ₮{grandTotal.toLocaleString()}
                   </p>
                 </div>
-                <p className="text-xs text-gray-400">{items.length} төрлийн бараа</p>
+                <p className="text-xs text-gray-400">{physicalLineTypes} төрлийн бараа</p>
               </div>
               <button
                 onClick={onCheckout}
@@ -312,6 +326,8 @@ function CartItemCard({
 }: CartItemCardProps) {
   const lineTotal = calculateTotal(item.product, item.config, item.quantity);
   const [qtyRaw, setQtyRaw] = useState(String(item.quantity));
+  const unitPrice = getBasePrice(item.product);
+  const isServiceLine = item.product.is_service === true;
 
   useEffect(() => {
     setQtyRaw(String(item.quantity));
@@ -370,43 +386,58 @@ function CartItemCard({
 
           {/* Quantity selector + item total */}
           <div className="flex items-center justify-between mt-2">
-            <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-0.5">
-              <button
-                onClick={onDecrement}
-                className="w-7 h-7 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-red-500 hover:bg-red-50 transition-colors active:scale-90"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-              <input
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                value={qtyRaw}
-                onChange={(e) => {
-                  const v = e.target.value.replace(/[^0-9]/g, '');
-                  setQtyRaw(v);
-                  if (v !== '') {
-                    const n = parseInt(v, 10);
-                    if (!Number.isNaN(n)) {
-                      onQuantityCommit(Math.min(CART_QTY_MAX, Math.max(1, n)));
+            {isServiceLine ? (
+              <div className="flex flex-col gap-1 min-w-0">
+                <p className="text-[11px] text-gray-600">
+                  <span className="text-gray-500">Тээврийн хөлс</span>
+                  <span className="ml-1.5 font-semibold text-gray-900 tabular-nums">
+                    ₮{unitPrice.toLocaleString()}
+                  </span>
+                </p>
+                <p className="text-[11px] text-gray-600">
+                  <span className="text-gray-500">Машины тоо</span>
+                  <span className="ml-1.5 font-semibold text-gray-900 tabular-nums">{item.quantity}</span>
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-0.5">
+                <button
+                  onClick={onDecrement}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-red-500 hover:bg-red-50 transition-colors active:scale-90"
+                >
+                  <Minus className="w-3.5 h-3.5" />
+                </button>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={qtyRaw}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/[^0-9]/g, '');
+                    setQtyRaw(v);
+                    if (v !== '') {
+                      const n = parseInt(v, 10);
+                      if (!Number.isNaN(n)) {
+                        onQuantityCommit(Math.min(CART_QTY_MAX, Math.max(1, n)));
+                      }
                     }
-                  }
-                }}
-                onBlur={() => commitQtyInput(qtyRaw)}
-                onFocus={(e) => e.target.select()}
-                className="w-12 min-w-[3rem] text-center text-sm font-semibold text-gray-800 bg-transparent outline-none"
-                aria-label="Тоо ширхэг"
-              />
-              <button
-                onClick={onIncrement}
-                className="w-7 h-7 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors active:scale-90"
-              >
-                <Plus className="w-3.5 h-3.5" />
-              </button>
-            </div>
+                  }}
+                  onBlur={() => commitQtyInput(qtyRaw)}
+                  onFocus={(e) => e.target.select()}
+                  className="w-12 min-w-[3rem] text-center text-sm font-semibold text-gray-800 bg-transparent outline-none"
+                  aria-label="Тоо ширхэг"
+                />
+                <button
+                  onClick={onIncrement}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors active:scale-90"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             {/* Item total price */}
-            <p className="text-sm font-semibold text-blue-600">
+            <p className="text-sm font-semibold text-blue-600 shrink-0">
               ₮{lineTotal.toLocaleString()}
             </p>
           </div>

@@ -5,7 +5,12 @@ import {
   Loader2, RefreshCw, Store, Gift, ChevronLeft, ChevronDown,
   Copy, Check,
 } from 'lucide-react';
-import { CartItem } from '../types';
+import type { CartItem, Product } from '../types';
+import {
+  DELIVERY_SERVICE_CART_ITEM_ID,
+  buildDeliveryServiceCartItem,
+  parseDeliveryServiceProductRow,
+} from '../lib/deliveryServiceCart';
 import { MapPickerModal, PickedLocation } from './MapPickerModal';
 import { calculateDistanceKm } from '../utils/haversine';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
@@ -88,6 +93,10 @@ export interface CheckoutModalProps {
   onClose:    () => void;
   items:      CartItem[];
   grandTotal: number;
+  /** Хүргэлт сонгосон үед is_service мөрийг сагсанд синк */
+  onSyncDeliveryServiceLine?: (item: CartItem | null) => void;
+  /** Сагснаас хүргэлтийн мөрийг хасахад нэмэгдэнэ (checkout доторх хүргэлтийг цуцлах) */
+  deliveryUiCancelNonce?: number;
   /** Төлбөрийн данс: байгууллага vs хувь хүн */
   isLoggedIn?: boolean;
   customerPhone?: number | null;
@@ -107,13 +116,26 @@ export function CheckoutModal({
   onClose,
   items,
   grandTotal,
+  onSyncDeliveryServiceLine,
+  deliveryUiCancelNonce = 0,
   isLoggedIn = false,
   customerPhone = null,
   customerGoogleId = null,
 }: CheckoutModalProps) {
 
-  // ── Derive store_id from cart (all items share the same store) ─────────────
-  const storeId: string | null = items[0]?.product?.store_id ?? null;
+  // ── Derive store_id from cart (бараа — is_service биш эхний мөр) ──────────
+  const storeId: string | null =
+    items.find((i) => !i.product.is_service)?.product?.store_id ??
+    items[0]?.product?.store_id ??
+    null;
+
+  const cartStoreIdForService = useMemo(
+    () =>
+      items.find((i) => !i.product.is_service)?.product?.store_id ??
+      items[0]?.product?.store_id ??
+      null,
+    [items],
+  );
 
   // ── Sheet animation ────────────────────────────────────────────────────────
   const [mounted,  setMounted]  = useState(false);
@@ -121,6 +143,7 @@ export function CheckoutModal({
 
   // ── Refs for auto-focus ────────────────────────────────────────────────────
   const phoneInputRef = useRef<HTMLInputElement>(null);
+  const handledDeliveryCancelNonceRef = useRef(0);
 
   // ── Wizard step + fade transition ─────────────────────────────────────────
   const [step,        setStep]        = useState<WizardStep>(1);
@@ -152,6 +175,8 @@ export function CheckoutModal({
   const [paymentDisplayError, setPaymentDisplayError] = useState('');
   const [isLoadingPaymentDisplay, setIsLoadingPaymentDisplay] = useState(false);
   const [rulesSheetOpen, setRulesSheetOpen] = useState(false);
+
+  const [deliveryServiceTemplate, setDeliveryServiceTemplate] = useState<Product | null>(null);
 
   // ── Step 1 — ХҮЛЭЭН АВАХ ─────────────────────────────────────────────────
   const [phone,        setPhone]        = useState('');
@@ -197,10 +222,18 @@ export function CheckoutModal({
   //  REACTIVE CALCULATION CHAIN
   // ────────────────────────────────────────────────────────────────────────���
 
+  const merchandiseTotal = useMemo(
+    () =>
+      items
+        .filter((i) => !i.product.is_service)
+        .reduce((s, i) => s + i.totalPrice, 0),
+    [items],
+  );
+
   const isFreeDelivery = useMemo<boolean>(() => {
     if (deliveryType !== 'delivery' || !store) return false;
-    return store.free_delivery_threshold > 0 && grandTotal >= store.free_delivery_threshold;
-  }, [deliveryType, store, grandTotal]);
+    return store.free_delivery_threshold > 0 && merchandiseTotal >= store.free_delivery_threshold;
+  }, [deliveryType, store, merchandiseTotal]);
 
   const mainBranchRoute = useMemo<MainBranchRoute | null>(() => {
     if (deliveryType !== 'delivery' || !location || !mainBranchOrigin) return null;
@@ -224,6 +257,7 @@ export function CheckoutModal({
   const deliveryCarCount = useMemo<number>(() => {
     let sum = 0;
     for (const item of items) {
+      if (item.product.is_service) continue;
       const coeff = item.product.loadingCoefficient;
       const c = coeff != null && Number.isFinite(coeff) && coeff > 0 ? coeff : 1;
       sum += item.quantity * c;
@@ -236,7 +270,61 @@ export function CheckoutModal({
     return transportFeePerCar * deliveryCarCount;
   }, [deliveryType, isFreeDelivery, transportFeePerCar, deliveryCarCount]);
 
-  const finalTotal = useMemo(() => grandTotal + totalDeliveryCharge, [grandTotal, totalDeliveryCharge]);
+  /** Сагсанд хүргэлтийн мөр орсон тул дахин нэмэхгүй */
+  const finalTotal = useMemo(() => grandTotal, [grandTotal]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setDeliveryServiceTemplate(null);
+      return;
+    }
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!supabaseUrl?.trim() || !supabaseAnonKey?.trim()) {
+      setDeliveryServiceTemplate(null);
+      return;
+    }
+    let cancelled = false;
+    const restBase = supabaseUrl.replace(/\/$/, '');
+    const headers = {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${supabaseAnonKey}`,
+      Accept: 'application/json',
+    };
+    void (async () => {
+      const pq = new URLSearchParams({
+        select: 'id,product_name,product_images,retail_price',
+        is_service: 'eq.true',
+        limit: '1',
+      });
+      try {
+        const res = await fetch(`${restBase}/rest/v1/products?${pq}`, { headers });
+        const json = await parseRestJson(res);
+        if (cancelled) return;
+        if (!res.ok || !Array.isArray(json) || json.length === 0) {
+          setDeliveryServiceTemplate(null);
+          return;
+        }
+        const row = json[0] as Record<string, unknown>;
+        setDeliveryServiceTemplate(parseDeliveryServiceProductRow(row, cartStoreIdForService));
+      } catch {
+        if (!cancelled) setDeliveryServiceTemplate(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, cartStoreIdForService]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    if (deliveryUiCancelNonce === handledDeliveryCancelNonceRef.current) return;
+    handledDeliveryCancelNonceRef.current = deliveryUiCancelNonce;
+    setDeliveryType('pickup');
+    setLocation(null);
+    setLocationError('');
+    setStep((s) => (s === 3 ? 2 : s));
+  }, [isOpen, deliveryUiCancelNonce]);
 
   const paymentBankDetails = useMemo(() => {
     const m = mainBranchPayment;
@@ -385,7 +473,10 @@ export function CheckoutModal({
       setStep(1); setStepVisible(true);
       setPhone(''); setOrgName(''); setRegister(''); setNote('');
       setPhoneError(''); setPhoneTouched(false);
-      setDeliveryType('pickup');
+      const hasServiceLine = items.some(
+        (i) => i.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID || i.product.is_service === true,
+      );
+      setDeliveryType(hasServiceLine ? 'delivery' : 'pickup');
       setLocation(null); setLocationError('');
       setIsMapOpen(false);
       setSubmitted(false);
@@ -396,6 +487,7 @@ export function CheckoutModal({
       setMainBranchOrigin(null);
       setCustomerRegisterDb(null);
       setPaymentDisplayError('');
+      handledDeliveryCancelNonceRef.current = deliveryUiCancelNonce;
       fetchStore();
       fetchPaymentDisplayContext();
       // Auto-focus phone field after the slide-up animation completes
@@ -503,7 +595,10 @@ export function CheckoutModal({
 
   function handleDeliveryChange(val: DeliveryType) {
     setDeliveryType(val);
-    if (val !== 'delivery') { setLocation(null); setLocationError(''); }
+    if (val !== 'delivery') {
+      setLocation(null); setLocationError('');
+      onSyncDeliveryServiceLine?.(null);
+    }
   }
 
   // ── Step navigation ────────────��─────────────────────────────────────────
@@ -516,6 +611,29 @@ export function CheckoutModal({
   }
 
   function handleStep2Next() {
+    if (deliveryType === 'delivery') {
+      if (!location) {
+        setLocationError('Хүргэлтийн байршил сонгоно уу.');
+        return;
+      }
+      if (!deliveryServiceTemplate) {
+        setLocationError('Хүргэлтийн барааны мэдээлэл ачаалагдаагүй байна.');
+        return;
+      }
+      if (!isFreeDelivery && (!mainBranchRoute || !store)) {
+        setLocationError('Хүргэлтийн тооцоо бэлэн биш байна.');
+        return;
+      }
+      const item = buildDeliveryServiceCartItem(
+        deliveryServiceTemplate,
+        transportFeePerCar,
+        deliveryCarCount,
+      );
+      onSyncDeliveryServiceLine?.(item);
+    } else {
+      onSyncDeliveryServiceLine?.(null);
+    }
+    setLocationError('');
     goToStep(3);
   }
 
@@ -832,7 +950,7 @@ export function CheckoutModal({
                 {/* Хүргүүлнэ — free threshold progress */}
                 {deliveryType === 'delivery' && store && store.free_delivery_threshold > 0 && (
                   <FreeDeliveryProgress
-                    cartTotal={grandTotal}
+                    cartTotal={merchandiseTotal}
                     threshold={store.free_delivery_threshold}
                     isFree={isFreeDelivery}
                   />
@@ -964,7 +1082,7 @@ export function CheckoutModal({
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-sm text-gray-500">
                       <span>Бараа</span>
-                      <span>₮{grandTotal.toLocaleString()}</span>
+                      <span>₮{merchandiseTotal.toLocaleString()}</span>
                     </div>
                     {deliveryType === 'delivery' && (
                       <div className="flex items-center justify-between text-sm">
