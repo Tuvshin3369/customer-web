@@ -55,6 +55,17 @@ async function parseRestJson(res: Response): Promise<unknown> {
   }
 }
 
+/** Тээврийн хөлсийг ₮1000-р дугуйлах (тэнцүү .5 → доош: 7500→7000, 7501→8000). */
+function roundTransportFeeToMnt1000(rawFee: number): number {
+  if (!Number.isFinite(rawFee) || rawFee <= 0) return 0;
+  const n = rawFee / 1000;
+  const floor = Math.floor(n);
+  const frac = n - floor;
+  if (frac < 0.5) return floor * 1000;
+  if (frac > 0.5) return (floor + 1) * 1000;
+  return floor * 1000;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 type DeliveryType  = 'pickup' | 'taxi' | 'delivery';
 type WizardStep    = 1 | 2 | 3;
@@ -251,7 +262,7 @@ export function CheckoutModal({
     if (isFreeDelivery) return 0;
     const calculatedFee = mainBranchRoute.distanceKm * store.base_price_per_km;
     const rawFee        = Math.max(calculatedFee, store.min_delivery_fee ?? 0);
-    return Math.round(rawFee / 100) * 100;
+    return roundTransportFeeToMnt1000(rawFee);
   }, [deliveryType, mainBranchRoute, store, isFreeDelivery]);
 
   const deliveryCarCount = useMemo<number>(() => {
@@ -259,10 +270,13 @@ export function CheckoutModal({
     for (const item of items) {
       if (item.product.is_service) continue;
       const coeff = item.product.loadingCoefficient;
-      const c = coeff != null && Number.isFinite(coeff) && coeff > 0 ? coeff : 1;
-      sum += item.quantity * c;
+      if (coeff == null || !Number.isFinite(coeff) || coeff < 0) continue;
+      sum += item.quantity * coeff;
     }
-    return Math.ceil(sum);
+    const ceiled = Math.ceil(sum);
+    const hasPhysical = items.some((i) => !i.product.is_service);
+    if (!hasPhysical) return 1;
+    return Math.max(1, ceiled);
   }, [items]);
 
   const totalDeliveryCharge = useMemo<number>(() => {
