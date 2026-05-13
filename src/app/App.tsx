@@ -204,7 +204,7 @@ const RELATED_PRODUCT_KEYS = [
 ] as const;
 
 const PRODUCTS_LIST_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,is_service,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,is_service,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function mapRowToChildProduct(
   row: Record<string, unknown>,
@@ -229,6 +229,7 @@ function mapRowToChildProduct(
     name: nm,
     stock,
     price,
+    receivedPrice: numField(row.received_price, 0),
     imageUrl: img,
     images: imageUrls.length > 0 ? imageUrls : undefined,
   };
@@ -623,6 +624,7 @@ export default function App() {
             groupId: row.group_id != null && row.group_id !== '' ? String(row.group_id) : undefined,
             brandId: row.brand_id != null && row.brand_id !== '' ? String(row.brand_id) : undefined,
             servicePrice: numField(row.service_price, 0),
+            receivedPrice: numField(row.received_price, 0),
             is_pigment: row.is_pigment === true,
             is_service: row.is_service === true,
             loadingCoefficient: (() => {
@@ -796,6 +798,17 @@ export default function App() {
       return [...rest, item];
     });
   }, []);
+
+  const clearShoppingCart = useCallback(() => {
+    const hadService = cartItems.some(
+      (i) => i.product.is_service === true || i.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID,
+    );
+    setCartItems([]);
+    setActiveCartStoreId(null);
+    setLockedStoreDisplayName(null);
+    if (hadService) setDeliveryUiCancelNonce((n) => n + 1);
+    setIsCartOpen(false);
+  }, [cartItems]);
 
   function handleConfigureProduct(product: Product) { setConfigProduct(product); }
 
@@ -1076,21 +1089,12 @@ export default function App() {
         onUpdateQuantity={handleUpdateQuantity}
         onRemoveItem={handleRemoveItem}
         onClearCart={() => {
-          const hadService = cartItems.some(
-            (i) => i.product.is_service === true || i.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID,
-          );
-          setCartItems([]);
-          setActiveCartStoreId(null);
-          setLockedStoreDisplayName(null);
-          if (hadService) setDeliveryUiCancelNonce((n) => n + 1);
-          // Close every page/modal so the user lands on Home
-          setIsCartOpen(false);
+          clearShoppingCart();
           setIsProfileOpen(false);
           setIsMyOrdersOpen(false);
           setIsHistoryOpen(false);
           setIsCheckoutOpen(false);
           setIsUserMenuOpen(false);
-          // Reset filters to default home state
           setSearchQuery('');
           setSelectedCategory('Бүх бараа');
         }}
@@ -1099,6 +1103,7 @@ export default function App() {
       <CheckoutModal
         isOpen={isCheckoutOpen}
         onClose={() => setIsCheckoutOpen(false)}
+        onOrderSuccessClose={clearShoppingCart}
         items={cartItems}
         grandTotal={cartGrandTotal}
         onSyncDeliveryServiceLine={handleSyncDeliveryServiceLine}

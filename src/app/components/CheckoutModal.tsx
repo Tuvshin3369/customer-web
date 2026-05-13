@@ -18,7 +18,13 @@ import { PaymentInfoCard } from './PaymentInfoCard';
 import {
   fetchCustomerProfileByPhone,
   fetchCustomerProfileByGoogleId,
+  resolveCustomerIdForOnlineOrder,
+  phoneToInt64,
 } from '../lib/customersRegister';
+import {
+  bulkInsertOnlineOrders,
+  cartItemsToOnlineOrderRows,
+} from '../lib/onlineOrdersSubmit';
 
 function normalizePhoneDigits(raw: unknown): string | null {
   if (raw == null) return null;
@@ -112,6 +118,8 @@ export interface CheckoutModalProps {
   isLoggedIn?: boolean;
   customerPhone?: number | null;
   customerGoogleId?: string | null;
+  /** Амжилттай илгээсний дараа модалыг хаахад (сагс хоослох г.м.) */
+  onOrderSuccessClose?: () => void;
 }
 
 // ─── Step meta ────────────────────────────────────────────────────────────────
@@ -132,6 +140,7 @@ export function CheckoutModal({
   isLoggedIn = false,
   customerPhone = null,
   customerGoogleId = null,
+  onOrderSuccessClose,
 }: CheckoutModalProps) {
 
   // ── Derive store_id from cart (бараа — is_service биш эхний мөр) ──────────
@@ -161,6 +170,7 @@ export function CheckoutModal({
   const [stepVisible, setStepVisible] = useState(true);
 
   function goToStep(next: WizardStep) {
+    setSubmitOrderError('');
     setStepVisible(false);
     setTimeout(() => {
       setStep(next);
@@ -209,7 +219,10 @@ export function CheckoutModal({
   // (no paymentMethod state needed anymore)
 
   // ── Submit ────────────────────────────────────────────────────────────────
-  const [submitted,    setSubmitted]    = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  /** online_orders INSERT — алдаа (step 3) */
+  const [submitOrderError, setSubmitOrderError] = useState('');
+  const [submitOrderBusy, setSubmitOrderBusy] = useState(false);
   const [copiedTotal,  setCopiedTotal]  = useState(false);
 
   function handleCopyTotal() {
@@ -307,7 +320,7 @@ export function CheckoutModal({
     };
     void (async () => {
       const pq = new URLSearchParams({
-        select: 'id,product_name,product_images,retail_price',
+        select: 'id,product_name,product_images,retail_price,received_price',
         is_service: 'eq.true',
         limit: '1',
       });
@@ -494,6 +507,8 @@ export function CheckoutModal({
       setLocation(null); setLocationError('');
       setIsMapOpen(false);
       setSubmitted(false);
+      setSubmitOrderError('');
+      setSubmitOrderBusy(false);
       setOrgExpanded(false);
       setRulesSheetOpen(false);
       setStoreRulesText(null);
@@ -651,11 +666,82 @@ export function CheckoutModal({
     goToStep(3);
   }
 
-  function handleSubmit() {
-    setSubmitted(true);
+  async function handleSubmit() {
+    setSubmitOrderError('');
+    const pErr = validatePhone(phone);
+    if (pErr) {
+      setPhoneTouched(true);
+      setPhoneError(pErr);
+      setSubmitOrderError(pErr);
+      return;
+    }
+    const sidNow = items.find((i) => !i.product.is_service)?.product?.store_id ?? items[0]?.product?.store_id ?? null;
+    if (sidNow == null || String(sidNow).trim() === '') {
+      setSubmitOrderError(
+        'Дэлгүүрийн мэдээлэл олдсонгүй. Сагсандаа бараа нэмээд дахин оролдоно уу.',
+      );
+      return;
+    }
+
+    setSubmitOrderBusy(true);
+    try {
+      const customerId = await resolveCustomerIdForOnlineOrder({
+        isLoggedIn,
+        phone: customerPhone ?? null,
+        googleId: customerGoogleId ?? null,
+      });
+      const phoneNum = phoneToInt64(phone);
+      if (Number.isNaN(phoneNum)) {
+        throw new Error('Утасны дугаар тохируулахад алдаа гарлаа.');
+      }
+      const lat =
+        deliveryType === 'delivery' && location?.lat != null && Number.isFinite(location.lat)
+          ? location.lat
+          : null;
+      const lng =
+        deliveryType === 'delivery' && location?.lng != null && Number.isFinite(location.lng)
+          ? location.lng
+          : null;
+
+      const orgT = orgName.trim();
+      const regT = register.trim();
+      const noteT = note.trim();
+
+      const rows = cartItemsToOnlineOrderRows({
+        items,
+        fallbackStoreId: String(sidNow).trim(),
+        customerId,
+        ecommercePhone: phoneNum,
+        ecommerceName: orgT.length > 0 ? orgT : null,
+        ecommerceRegister: regT.length > 0 ? regT.toUpperCase() : null,
+        noteTrimmed: noteT.length > 0 ? noteT : null,
+        deliveryType,
+        locationLat: lat,
+        locationLng: lng,
+      });
+      if (rows.length === 0) {
+        throw new Error('Илгээх захиалгын мөр олдсонгүй.');
+      }
+
+      await bulkInsertOnlineOrders(rows);
+      setSubmitted(true);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Захиалга илгээхэд алдаа гарлаа.';
+      setSubmitOrderError(msg);
+      console.error('online_orders insert:', e);
+    } finally {
+      setSubmitOrderBusy(false);
+    }
   }
 
   const isLoading = isLoadingStore || isLoadingPaymentDisplay;
+
+  function dismissCheckout() {
+    if (submitted) {
+      onOrderSuccessClose?.();
+    }
+    onClose();
+  }
 
   function retryDeliveryPricingData() {
     void fetchStore();
@@ -671,7 +757,7 @@ export function CheckoutModal({
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-350"
         style={{ opacity: visible ? 1 : 0 }}
-        onClick={onClose}
+        onClick={dismissCheckout}
       />
 
       {/* Sheet */}
@@ -709,7 +795,7 @@ export function CheckoutModal({
             )}
           </div>
           <button
-            onClick={onClose}
+            onClick={dismissCheckout}
             className="w-8 h-8 flex items-center justify-center rounded-full bg-gray-100 hover:bg-gray-200 transition-colors"
           >
             <X className="w-4 h-4 text-gray-500" />
@@ -743,7 +829,7 @@ export function CheckoutModal({
                   Таны захиалгыг хүлээж авлаа.<br />Удахгүй холбоо барина.
                 </p>
                 <button
-                  onClick={onClose}
+                  onClick={dismissCheckout}
                   className="mt-2 px-8 py-2.5 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 transition-colors"
                 >
                   Хаах
@@ -1054,6 +1140,13 @@ export function CheckoutModal({
                   </div>
                 )}
 
+                {submitOrderError && (
+                  <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5">
+                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <p className="flex-1 text-xs text-red-700 leading-snug">{submitOrderError}</p>
+                  </div>
+                )}
+
                 {isLoadingPaymentDisplay && (
                   <div className="flex items-center gap-2 text-xs text-gray-500">
                     <Loader2 className="w-4 h-4 animate-spin shrink-0" />
@@ -1197,12 +1290,17 @@ export function CheckoutModal({
                     Буцах
                   </button>
                   <button
-                    onClick={handleSubmit}
-                    className="flex-[2] bg-blue-600 hover:bg-blue-700 active:bg-blue-800
-                               text-white text-sm font-semibold py-3.5 rounded-xl
-                               transition-colors shadow-sm"
+                    type="button"
+                    disabled={submitOrderBusy}
+                    onClick={() => { void handleSubmit(); }}
+                    className={`flex-[2] flex items-center justify-center gap-2 text-sm font-semibold py-3.5 rounded-xl
+                               transition-colors shadow-sm ${submitOrderBusy
+                      ? 'bg-blue-400 text-white cursor-not-allowed'
+                      : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white'
+                    }`}
                   >
-                    Захиалга илгээх
+                    {submitOrderBusy && <Loader2 className="w-4 h-4 animate-spin shrink-0" />}
+                    {submitOrderBusy ? 'Илгээж байна…' : 'Захиалга илгээх'}
                   </button>
                 </div>
               </div>

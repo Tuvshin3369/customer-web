@@ -71,6 +71,7 @@ export function parseDeliveryServiceProductRow(
     is_service: true,
     price: retail,
     basePrice: 0,
+    receivedPrice: numField(row.received_price, 0),
     stock: 999_999,
     imageUrl: img,
     images: urls.length > 0 ? urls : undefined,

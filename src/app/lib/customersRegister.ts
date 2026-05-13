@@ -40,6 +40,71 @@ async function parseJsonSafely(res: Response): Promise<unknown> {
   }
 }
 
+const customerSelectHeaders = (anonKey: string): HeadersInit => ({
+  apikey: anonKey,
+  Authorization: `Bearer ${anonKey}`,
+  Accept: 'application/json',
+});
+
+function firstCustomerIdFromResponse(json: unknown): string | null {
+  if (!Array.isArray(json) || json.length === 0) return null;
+  const id = (json[0] as Record<string, unknown>).id;
+  return id != null && String(id).trim() ? String(id).trim() : null;
+}
+
+/**
+ * `online_orders.customer_id`: нэвтэрсэн бол тухайн customers.id, эсрэг тохиолдолд
+ * `customers.is_individual = true` анхны мөрийг (дотоод «зочин») ашиглана.
+ */
+export async function resolveCustomerIdForOnlineOrder(params: {
+  isLoggedIn: boolean;
+  phone: number | null;
+  googleId: string | null;
+}): Promise<string> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const headers = customerSelectHeaders(anonKey);
+
+  if (params.isLoggedIn) {
+    const gid = params.googleId?.trim();
+    if (gid) {
+      const q = new URLSearchParams({ select: 'id', google_id: `eq.${gid}`, limit: '1' });
+      const res = await fetch(`${restBase}/rest/v1/customers?${q}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok) {
+        throw new Error(formatPostgrestError(json, res) || 'Хэрэглэгчийн мэдээлэл уншихад алдаа.');
+      }
+      const id = firstCustomerIdFromResponse(json);
+      if (id) return id;
+      throw new Error('Нэвтэрсэн хэрэглэгчийн бүртгэл олдсонгүй.');
+    }
+    const phone = params.phone;
+    if (phone != null && Number.isFinite(phone) && Number.isInteger(phone) && phone > 0) {
+      const q = new URLSearchParams({ select: 'id', phone: `eq.${phone}`, limit: '1' });
+      const res = await fetch(`${restBase}/rest/v1/customers?${q}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok) {
+        throw new Error(formatPostgrestError(json, res) || 'Хэрэглэгчийн мэдээлэл уншихад алдаа.');
+      }
+      const id = firstCustomerIdFromResponse(json);
+      if (id) return id;
+      throw new Error('Нэвтэрсэн хэрэглэгчийн утасны бүртгэл олдсонгүй.');
+    }
+    throw new Error('Нэвтрэлтийн мэдээлэл дутуу байна.');
+  }
+
+  const q = new URLSearchParams({ select: 'id', is_individual: 'eq.true', limit: '1' });
+  const res = await fetch(`${restBase}/rest/v1/customers?${q}`, { headers });
+  const json = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(formatPostgrestError(json, res) || '«Хувь хүн» бүртгэл уншихад алдаа.');
+  }
+  const id = firstCustomerIdFromResponse(json);
+  if (id) return id;
+  throw new Error(
+    '«Хувь хүн» үйлчлэгчийн бүртгэл (customers.is_individual=true) олдсонгүй.',
+  );
+}
+
 /** Утасны дугаарыг зөвхөн тоо болгон (DB int8). 976, +976, 0 эхлэлийг хялбар цэвэрлэнэ. */
 export function phoneToInt64(phone: string): number {
   const digits = phone.replace(/\D/g, '');

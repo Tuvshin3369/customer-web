@@ -21,6 +21,8 @@ export interface ChildProduct {
   name: string;
   stock: number;
   price: number;
+  /** products.received_price */
+  receivedPrice?: number;
   imageUrl: string;
   images?: string[];   // optional gallery images; falls back to [imageUrl]
 }
@@ -63,6 +65,8 @@ export interface Product {
   /** coded_paints шүүхэд: groups.id → groups.group_number */
   groupId?: string;
   servicePrice?: number;
+  /** products.received_price — борлуулалтын бүртгэл / online_orders */
+  receivedPrice?: number;
   is_pigment?: boolean;
   brandId?: string;
   // ── Parent product fields ─────────────────────────────────────────────────
@@ -80,6 +84,8 @@ export interface CartItemConfig {
   colorCode?: string; // TYPE 4
   /** TYPE 4: coded_paints.price (кодтой үед нэгж үнэнд нэмэгдэнэ) */
   codedPaintListPrice?: number;
+  /** TYPE 4: coded_paints.id — захиалга илгээх үед баазад */
+  codedPaintId?: string;
   /** is_foam_range: «Бодох»-ийн дараах нэгж үнэ (1 ширхэг) */
   foamUnitPrice?: number;
   /** is_foam_range: өндөр×өргөн×waste */

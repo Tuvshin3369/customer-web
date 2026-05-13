@@ -197,6 +197,8 @@ export function ProductConfigModal({
   const [codedPaintPreviewRgb, setCodedPaintPreviewRgb] = useState<CodedPaintRgb | null>(null);
   /** coded_paints.price — кодтой нэгж үнэнд нэмэгдэнэ */
   const [codedPaintListPrice, setCodedPaintListPrice] = useState(0);
+  /** coded_paints.id — online_orders дамжуулах */
+  const [codedPaintRowId, setCodedPaintRowId] = useState<string | null>(null);
   /** Код ба groups.product_number зөрөх үед сагс / UI-д ашиглах бараа */
   const [resolvedPaintProduct, setResolvedPaintProduct] = useState<Product | null>(null);
 
@@ -261,6 +263,7 @@ export function ProductConfigModal({
       setResolvedPaintProduct(null);
       setCodedPaintPreviewRgb(null);
       setCodedPaintListPrice(0);
+      setCodedPaintRowId(null);
       const eff =
         product?.is_coded_paint === true
           ? 4
@@ -369,6 +372,7 @@ export function ProductConfigModal({
         setResolvedPaintProduct(null);
         setCodedPaintPreviewRgb(null);
         setCodedPaintListPrice(0);
+        setCodedPaintRowId(null);
         return;
       }
       const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/$/, '');
@@ -381,8 +385,10 @@ export function ProductConfigModal({
         setResolvedPaintProduct(null);
         setCodedPaintPreviewRgb(null);
         setCodedPaintListPrice(0);
+        setCodedPaintRowId(null);
         return;
       }
+      setCodedPaintRowId(meta.id);
       setCodedPaintPreviewRgb(meta.rgb);
       setCodedPaintListPrice(meta.listPrice);
 
@@ -488,6 +494,10 @@ export function ProductConfigModal({
       width:     width     ? parseFloat(width)     : undefined,
       colorCode: colorCode || undefined,
       codedPaintListPrice: colorCode.trim() ? codedPaintListPrice : undefined,
+      codedPaintId:
+        product?.is_coded_paint === true && colorCode.trim() && codedPaintRowId
+          ? codedPaintRowId
+          : undefined,
       foamUnitPrice:
         product?.is_foam_range === true && foamUnitPrice != null && Number.isFinite(foamUnitPrice)
           ? Math.round(foamUnitPrice)
@@ -506,6 +516,7 @@ export function ProductConfigModal({
     width,
     colorCode,
     codedPaintListPrice,
+    codedPaintRowId,
     quantity,
     foamUnitPrice,
     foamTotalArea,
@@ -553,6 +564,10 @@ export function ProductConfigModal({
       width:     width     ? parseFloat(width)     : undefined,
       colorCode: colorCode.trim() || undefined,
       codedPaintListPrice: colorCode.trim() ? codedPaintListPrice : undefined,
+      codedPaintId:
+        effectiveProduct?.is_coded_paint === true && colorCode.trim() && codedPaintRowId
+          ? codedPaintRowId
+          : undefined,
       foamUnitPrice:
         foamUnitPrice != null && Number.isFinite(foamUnitPrice) ? Math.round(foamUnitPrice) : undefined,
       foamTotalArea:
@@ -582,6 +597,11 @@ export function ProductConfigModal({
             stock: c.stock,
             imageUrl: c.imageUrl,
             productType: 1,
+            store_id: product.store_id,
+            receivedPrice:
+              c.receivedPrice != null && Number.isFinite(c.receivedPrice)
+                ? c.receivedPrice
+                : undefined,
           };
           onConfirm({
             cartItemId: `${c.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -844,6 +864,7 @@ export function ProductConfigModal({
                           setColorCode(v);
                           setCodedPaintPreviewRgb(null);
                           setCodedPaintListPrice(0);
+                          setCodedPaintRowId(null);
                           if (!v.trim()) setResolvedPaintProduct(null);
                           touch('colorCode');
                         }}
@@ -879,6 +900,7 @@ export function ProductConfigModal({
                                 onClick={() => {
                                   suppressCodeSuggestAutoOpenRef.current = true;
                                   setColorCode(row.color_code);
+                                  setCodedPaintRowId(row.id);
                                   setCodedPaintPreviewRgb(row.rgb);
                                   setCodedPaintListPrice(row.listPrice);
                                   setShowCodeSuggestions(false);

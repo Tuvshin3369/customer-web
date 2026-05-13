@@ -7,7 +7,7 @@ import type { Product } from '../types';
 const PLACEHOLDER = 'https://via.placeholder.com/400x500?text=No+Image';
 
 const RESOLVED_PRODUCT_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function numField(v: unknown, fallback = 0): number {
   const n = Number(v);
@@ -101,6 +101,7 @@ function mapRowToProduct(
     })(),
     groupId: gid,
     servicePrice: numField(row.service_price, 0),
+    receivedPrice: numField(row.received_price, 0),
     is_pigment: row.is_pigment === true,
     name: nm,
     category: 'Бусад',
@@ -423,11 +424,11 @@ export async function fetchCodedPaintByExactCode(
   anonKey: string,
   groupNumber: string,
   colorCodeExact: string,
-): Promise<{ item_number: string; rgb: CodedPaintRgb | null; listPrice: number } | null> {
+): Promise<{ id: string; item_number: string; rgb: CodedPaintRgb | null; listPrice: number } | null> {
   const code = colorCodeExact.trim();
   if (!code || !groupNumber) return null;
   const q = [
-    'select=item_number,r,g,b,price',
+    'select=id,item_number,r,g,b,price',
     `group_number=eq.${encodeURIComponent(groupNumber)}`,
     `color_code=eq.${encodeURIComponent(code)}`,
     'limit=1',
@@ -435,9 +436,16 @@ export async function fetchCodedPaintByExactCode(
   const json = await restGetJson(restBase, anonKey, `/rest/v1/coded_paints?${q}`);
   if (!Array.isArray(json) || json.length === 0) return null;
   const row = json[0] as Record<string, unknown>;
+  const idRaw = row.id;
+  if (idRaw == null || String(idRaw).trim() === '') return null;
   const inum = row.item_number;
   if (inum == null) return null;
-  return { item_number: String(inum), rgb: parseCodedPaintRgbFromRow(row), listPrice: numField(row.price, 0) };
+  return {
+    id: String(idRaw).trim(),
+    item_number: String(inum),
+    rgb: parseCodedPaintRgbFromRow(row),
+    listPrice: numField(row.price, 0),
+  };
 }
 
 /** @deprecated fetchCodedPaintByExactCode ашиглана */
