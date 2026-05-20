@@ -81,21 +81,41 @@ export function ChildSelectionModal({
       .filter((c) => (quantities[c.id] ?? 0) > 0)
       .map((c) => {
         const qty = quantities[c.id]!;
+        const listRetail = c.retailPrice ?? c.price;
+        const saleUnit = c.price;
         return {
           cartItemId: `${c.id}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           product: {
             id: c.id,
             name: c.name,
             category: parentProduct.category,
-            price: c.price,
-            basePrice: c.price,
+            store_id: parentProduct.store_id,
+            categoryId: parentProduct.categoryId,
+            brandId: c.brandId ?? parentProduct.brandId,
+            price: listRetail > 0 ? listRetail : saleUnit,
+            basePrice: saleUnit,
+            oldPrice:
+              (c.loyaltyPriceMode === 'v1' || c.loyaltyPriceMode === 'v2') && listRetail > saleUnit
+                ? listRetail
+                : undefined,
+            discount: undefined,
+            retailPrice: listRetail > 0 ? listRetail : undefined,
+            wholesalePrice: c.wholesalePrice,
+            plannedStandardBaseUnit: c.plannedStandardBaseUnit,
+            catalogDiscountPct: c.catalogDiscountPct,
+            onlineDiscountPctAtFetch: c.onlineDiscountPctAtFetch,
+            loyaltyPriceMode: c.loyaltyPriceMode,
+            loyaltyReportWholesalePct: c.loyaltyReportWholesalePct,
+            loyaltyReportRetailDiscountPct: c.loyaltyReportRetailDiscountPct,
             stock: c.stock,
             imageUrl: c.imageUrl,
+            images: c.images,
             productType: 1,
+            receivedPrice: c.receivedPrice,
           },
           quantity: qty,
           config: {},
-          totalPrice: c.price * qty,
+          totalPrice: saleUnit * qty,
         };
       });
     onAddItems(items);
@@ -230,16 +250,31 @@ function ChildRow({ child, quantity, onDecrement, onIncrement }: ChildRowProps) 
           <p className="text-sm font-medium text-gray-900 line-clamp-2 leading-snug">
             {child.name}
           </p>
-          <div className="flex items-center gap-3 mt-1">
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
             <p className="text-[11px] text-gray-400">
               Үлдэгдэл:{' '}
               <span className={`font-semibold ${child.stock <= 2 ? 'text-red-500' : 'text-gray-600'}`}>
                 {child.stock}
               </span>
             </p>
-            <p className="text-[11px] text-blue-600 font-semibold">
-              ₮{child.price.toLocaleString()}
-            </p>
+            <div className="flex items-center gap-1">
+              {(child.loyaltyPriceMode === 'v1' || child.loyaltyPriceMode === 'v2') &&
+              child.retailPrice != null &&
+              child.retailPrice > child.price ? (
+                <>
+                  <p className="text-[11px] text-gray-400 line-through">
+                    ₮{Math.round(child.retailPrice).toLocaleString()}
+                  </p>
+                  <p className="text-[11px] text-blue-600 font-semibold">
+                    ₮{Math.round(child.price).toLocaleString()}
+                  </p>
+                </>
+              ) : (
+                <p className="text-[11px] text-blue-600 font-semibold">
+                  ₮{child.price.toLocaleString()}
+                </p>
+              )}
+            </div>
           </div>
         </div>
 

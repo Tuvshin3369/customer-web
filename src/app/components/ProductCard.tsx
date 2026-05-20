@@ -1,15 +1,48 @@
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Product } from '../types';
+import { productCardDiscountPercent } from '../lib/customerLoyaltyContext';
 
 interface ProductCardProps {
   product: Product;
   onConfigureProduct: (product: Product) => void;
+  /**
+   * is_foam_range: жагсаалтын картанд л — давуу хувьтай үл мэнд (сонгох модалын нэгж тооцоололд үл хамаарна).
+   */
+  foamLoyaltyPreviewPercent?: number;
 }
 
-export function ProductCard({ product, onConfigureProduct }: ProductCardProps) {
+export function ProductCard({
+  product,
+  onConfigureProduct,
+  foamLoyaltyPreviewPercent,
+}: ProductCardProps) {
   function handleOpen() {
     onConfigureProduct(product);
   }
+
+  const catalogListUnit =
+    product.retailPrice != null && product.retailPrice > 0
+      ? product.retailPrice
+      : product.price > 0
+        ? product.price
+        : 0;
+
+  const useFoamLoyaltyPreview =
+    product.is_foam_range === true &&
+    foamLoyaltyPreviewPercent != null &&
+    foamLoyaltyPreviewPercent > 0 &&
+    catalogListUnit > 0 &&
+    Number.isFinite(foamLoyaltyPreviewPercent);
+
+  const pctForBadge = useFoamLoyaltyPreview
+    ? Math.round(Math.min(100, Math.max(0, foamLoyaltyPreviewPercent)))
+    : (productCardDiscountPercent(product) ?? 0);
+
+  const displaySaleMoney = useFoamLoyaltyPreview
+    ? Math.max(0, Math.round(catalogListUnit * (1 - foamLoyaltyPreviewPercent / 100)))
+    : product.basePrice ?? product.price;
+
+  const displayOldMoney = useFoamLoyaltyPreview ? catalogListUnit : product.oldPrice;
 
   return (
     <div
@@ -41,9 +74,9 @@ export function ProductCard({ product, onConfigureProduct }: ProductCardProps) {
         />
 
         {/* Discount badge — top-left only */}
-        {(product.discount ?? 0) > 0 && (
+        {pctForBadge > 0 && (
           <div className="absolute top-2 left-2 bg-red-500 text-white text-xs font-semibold px-2 py-1 rounded pointer-events-none shadow-sm">
-            -{product.discount}%
+            -{pctForBadge}%
           </div>
         )}
       </div>
@@ -56,11 +89,11 @@ export function ProductCard({ product, onConfigureProduct }: ProductCardProps) {
 
         <div className="flex items-center gap-2 mb-1">
           <p className="text-lg font-semibold text-blue-600">
-            ₮{(product.basePrice ?? product.price).toLocaleString()}
+            ₮{displaySaleMoney.toLocaleString()}
           </p>
-          {product.oldPrice && (
+          {displayOldMoney != null && displayOldMoney > displaySaleMoney && (
             <p className="text-sm text-gray-400 line-through">
-              ₮{product.oldPrice.toLocaleString()}
+              ₮{displayOldMoney.toLocaleString()}
             </p>
           )}
         </div>

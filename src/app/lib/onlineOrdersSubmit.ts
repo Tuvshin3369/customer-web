@@ -1,4 +1,5 @@
-import type { CartItem } from '../types';
+import type { CartItem, Product } from '../types';
+import { calculateTotal } from '../utils/priceCalc';
 
 export type CheckoutDeliveryKind = 'pickup' | 'taxi' | 'delivery';
 
@@ -23,9 +24,64 @@ function messageFromRest(json: unknown, status: number): string {
   return `HTTP ${status}`;
 }
 
-function lineUnitSellingPrice(item: CartItem): number {
-  const q = Math.max(1, item.quantity);
-  return Math.max(0, Math.round(item.totalPrice / q));
+/**
+ * `online_orders.system_price`-ийн мөрийн нийлбэр — ямар ч нөхцөлд (**V1**, **V2**, эсвэл
+ * давуу эрхгүй) **зөвхөн жагсаалтын анхдагч** `products.retail_price`-аас тооцогдсон.
+ * Catalog/онлайны хөнгөлөлт, давуу эрх, бөөний үнэн дээр суурилтгүй (`wholesale`-г үл ашиглана).
+ *
+ * Тоо баримжаа (ургын урт өргөн, өнгийн код ба үйлчилгээний нэмэлтийн нийлбэр гэх мэт) нь зарах
+ * мөрний `calculateTotal` логиктой адилхан хэвээр; нэгжийн үнэлгээ нь **жагсаалтын retail** төдий.
+ */
+function lineSystemTotalRetailPriceOnly(item: CartItem): number {
+  const qty = Math.max(1, item.quantity);
+  const p = item.product;
+  const cfg = item.config;
+
+  const listRetailRaw = Number(p.retailPrice ?? p.price ?? 0);
+  if (!Number.isFinite(listRetailRaw) || listRetailRaw <= 0) {
+    return 0;
+  }
+  const listRetail = Math.max(0, Math.round(listRetailRaw));
+
+  const type = p.productType ?? 1;
+  /** Хөөс: талбай/foam_unit ашиглахгүй, зөвхөн SKU-ийн retail × тоо ширхэг */
+  if (type === 3 && p.is_foam_range === true) {
+    return Math.max(0, Math.round(listRetail * qty));
+  }
+
+  const synth: Product = {
+    ...p,
+    price: listRetail,
+    basePrice: listRetail,
+    wholesalePrice: undefined,
+    loyaltyPriceMode: undefined,
+    discount: undefined,
+    oldPrice: undefined,
+    catalogDiscountPct: undefined,
+    onlineDiscountPctAtFetch: undefined,
+    plannedStandardBaseUnit: undefined,
+  };
+
+  return calculateTotal(synth, cfg, qty);
+}
+
+function lineSellingAndSystemTotals(item: CartItem): { soldTotal: number; systemTotal: number } {
+  const soldTotal = calculateTotal(item.product, item.config, item.quantity);
+  const systemTotal = lineSystemTotalRetailPriceOnly(item);
+
+  return { soldTotal, systemTotal };
+}
+
+/**
+ * Жагсаалтын нэгжээс зарах нэгж хүртэлх **бодит** хямдралын хувь (0–100, бүхэл тоо).
+ * retail → sold нь системийн retail-с нэгж (system_price/unit) ба sold_price/unit.
+ */
+function percentDiscountedFromRetailUnit(unitSold: number, unitRetailList: number): number {
+  const r = Number(unitRetailList);
+  const s = Number(unitSold);
+  if (!Number.isFinite(r) || r <= 0 || !Number.isFinite(s) || s < 0) return 0;
+  if (s >= r) return 0;
+  return Math.min(100, Math.max(0, Math.round(100 - (s * 100) / r)));
 }
 
 function foamSizeCell(item: CartItem): string | null {
@@ -77,7 +133,11 @@ export function cartItemsToOnlineOrderRows(opts: {
     if (!storeId) continue;
 
     const q = Math.max(1, item.quantity);
-    const unit = lineUnitSellingPrice(item);
+
+    const { soldTotal, systemTotal } = lineSellingAndSystemTotals(item);
+    const unitSold = Math.max(0, Math.round(soldTotal / q));
+    const unitSystem = Math.max(0, Math.round(systemTotal / q));
+
     const rp = Math.round(Number(item.product.receivedPrice ?? 0));
     let received_price = Number.isFinite(rp) ? rp : 0;
 
@@ -106,13 +166,37 @@ export function cartItemsToOnlineOrderRows(opts: {
     const foam_size = foamSizeCell(item);
     const length_meter = lengthMeterCell(item);
 
-    const pct = (v: unknown): number => {
+    const pctClamp = (v: unknown): number => {
       const n = Number(v);
       if (!Number.isFinite(n)) return 0;
       return Math.min(100, Math.max(0, Math.round(n)));
     };
-    /** Product.discount — барааны нийт хөнгөлөлтийн хувь (байхгүй бол 0) */
-    const productDiscountPct = pct(item.product.discount);
+    const loyaltyMode = item.product.loyaltyPriceMode;
+
+    let wholesale_discount_percent = 0;
+    let product_discount_percent = 0;
+    let additional_discount_percent = 0;
+    if (loyaltyMode === 'v1') {
+      /** V1: customer_status-хувь биш — жагсаалтын retail нэгж (system_price) vs зарах sold нэгж */
+      wholesale_discount_percent =
+        unitSystem > 0 ? percentDiscountedFromRetailUnit(unitSold, unitSystem) : 0;
+    } else if (loyaltyMode === 'v2') {
+      /** V2: харилцагчийн бодит «авсан» хямдралын хувь (жагсаалтын retail нэгж vs sold нэгж) */
+      additional_discount_percent =
+        unitSystem > 0 ? percentDiscountedFromRetailUnit(unitSold, unitSystem) : 0;
+    } else {
+      /** V1/V2 биш эсвэл нэвтрээгүй: products.discount ба online_discount Percent-ийн нийлбэр → product_discount_percent */
+      const cat = Number(item.product.catalogDiscountPct ?? 0);
+      const onl = Number(item.product.onlineDiscountPctAtFetch ?? 0);
+      if (cat > 0 || onl > 0) {
+        const sum =
+          Number.isFinite(cat) && Number.isFinite(onl)
+            ? Math.min(100, Math.max(0, cat + onl))
+            : 0;
+        product_discount_percent = pctClamp(sum);
+      }
+      additional_discount_percent = 0;
+    }
 
     rows.push({
       store_id: storeId,
@@ -126,8 +210,8 @@ export function cartItemsToOnlineOrderRows(opts: {
       received_price,
       /** Өнгийн кодтой захиалга */
       is_pigment: hasCode,
-      system_price: unit,
-      sold_price: unit,
+      system_price: unitSystem,
+      sold_price: unitSold,
       foam_size,
       length_meter,
       ecommerce_phone: phone,
@@ -140,9 +224,9 @@ export function cartItemsToOnlineOrderRows(opts: {
       ecommerce_delivery_location_lat: lat,
       ecommerce_delivery_location_lng: lng,
       vat_percent: 0,
-      product_discount_percent: productDiscountPct,
-      wholesale_discount_percent: 0,
-      additional_discount_percent: 0,
+      product_discount_percent,
+      wholesale_discount_percent,
+      additional_discount_percent,
       note: note && note.length > 0 ? note : null,
     });
   }

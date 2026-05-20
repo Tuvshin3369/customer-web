@@ -5,6 +5,7 @@ import {
 import { CartItem } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { configLabel, calculateTotal, getBasePrice } from '../utils/priceCalc';
+import { foamCatalogDiscountPercent } from '../utils/customerPrivilegedPricing';
 import { ProductGallery } from './ProductGallery';
 
 interface CartDrawerProps {
@@ -373,6 +374,24 @@ function CartItemCard({
                   {label}
                 </p>
               )}
+              {item.product.is_foam_range === true &&
+                item.config.foamStandardUnitPrice != null &&
+                item.config.foamUnitPrice != null &&
+                (item.product.loyaltyPriceMode === 'v1' ||
+                  item.product.loyaltyPriceMode === 'v2') &&
+                foamCatalogDiscountPercent(
+                  item.config.foamStandardUnitPrice,
+                  item.config.foamUnitPrice,
+                ) > 0 && (
+                  <p className="text-[10px] text-red-500 font-semibold mt-0.5">
+                    Хөнгөлөлт: −
+                    {foamCatalogDiscountPercent(
+                      item.config.foamStandardUnitPrice,
+                      item.config.foamUnitPrice,
+                    )}
+                    %
+                  </p>
+                )}
             </div>
 
             {/* Always-visible remove button */}

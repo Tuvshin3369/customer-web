@@ -12,6 +12,8 @@ import {
   type CodedPaintSuggestionRow,
   type CodedPaintRgb,
 } from '../utils/codedPaintPricing';
+import type { CustomerLoyaltyContext } from '../lib/customerLoyaltyContext';
+import { applyLoyaltyToProduct, applyFoamCatalogUnitToLoyalty, foamCatalogDiscountPercent } from '../utils/customerPrivilegedPricing';
 import { ProductGallery } from './ProductGallery';
 import { ProductManualSheet } from './ProductManualSheet';
 
@@ -24,6 +26,8 @@ interface ProductConfigModalProps {
   storeId?: string | null;
   brandId?: string;
   onlineDiscountPercent?: number;
+  /** Кодын бараанаас сонгоход V1/V2 давхаардана */
+  loyaltyContext?: CustomerLoyaltyContext | null;
 }
 
 /** is_foam_range: өргөний санал — өндөр × ratio */
@@ -154,6 +158,7 @@ export function ProductConfigModal({
   storeId = null,
   brandId: brandIdProp,
   onlineDiscountPercent = 0,
+  loyaltyContext = null,
 }: ProductConfigModalProps) {
   const [mounted, setMounted]   = useState(false);
   const [visible, setVisible]   = useState(false);
@@ -164,8 +169,8 @@ export function ProductConfigModal({
   const [height,    setHeight]    = useState('');
   const [width,     setWidth]     = useState('');
   const [colorCode, setColorCode] = useState('');
-  /** is_foam_range: «Бодох»-оор — нэгж үнэ (1 ширхэг, ₮) */
-  const [foamUnitPrice, setFoamUnitPrice] = useState<number | null>(null);
+  /** is_foam_range: «Бодох» — стандарт нэгж (талбай × интервал үнэ), V1/V2 үүн дээр */
+  const [foamComputedStandardUnit, setFoamComputedStandardUnit] = useState<number | null>(null);
   const [foamTotalArea, setFoamTotalArea] = useState<number | null>(null);
   const [foamCalcError, setFoamCalcError] = useState<string | null>(null);
 
@@ -219,10 +224,36 @@ export function ProductConfigModal({
     return resolvedPaintProduct ?? product;
   }, [product, resolvedPaintProduct]);
 
-  const productForPricing = useMemo((): Product | null => {
+  const loyaltyOverlaidEffective = useMemo((): Product | null => {
     if (!effectiveProduct) return null;
-    return { ...effectiveProduct, productType: type };
-  }, [effectiveProduct, type]);
+    return applyLoyaltyToProduct(effectiveProduct, loyaltyContext ?? null);
+  }, [effectiveProduct, loyaltyContext]);
+
+  const productForPricing = useMemo((): Product | null => {
+    if (!loyaltyOverlaidEffective) return null;
+    return { ...loyaltyOverlaidEffective, productType: type };
+  }, [loyaltyOverlaidEffective, type]);
+
+  const foamLoyaltyPricing = useMemo(() => {
+    if (
+      product?.is_foam_range !== true ||
+      foamComputedStandardUnit == null ||
+      !Number.isFinite(foamComputedStandardUnit)
+    ) {
+      return null;
+    }
+    return applyFoamCatalogUnitToLoyalty(
+      foamComputedStandardUnit,
+      loyaltyOverlaidEffective?.brandId ?? product?.brandId,
+      loyaltyContext ?? null,
+    );
+  }, [
+    product?.is_foam_range,
+    foamComputedStandardUnit,
+    loyaltyOverlaidEffective?.brandId,
+    product?.brandId,
+    loyaltyContext,
+  ]);
 
   const foamRatio = useMemo((): number | null => {
     if (!product || product.is_foam_range !== true) return null;
@@ -246,7 +277,7 @@ export function ProductConfigModal({
       // Reset form on every open
       setQuantity(1);
       setLength(''); setHeight(''); setWidth(''); setColorCode('');
-      setFoamUnitPrice(null);
+      setFoamComputedStandardUnit(null);
       setFoamTotalArea(null);
       setFoamCalcError(null);
       widthTouchedRef.current = false;
@@ -459,13 +490,13 @@ export function ProductConfigModal({
       if (!height.trim() || parseFloat(height) <= 0)
         e.height = 'Өндрийг оруулна уу.';
       if (product?.is_foam_range === true) {
-        if (foamUnitPrice == null || !Number.isFinite(foamUnitPrice)) {
+        if (foamComputedStandardUnit == null || !Number.isFinite(foamComputedStandardUnit)) {
           e.foam = '«Бодох» дарж нэгж үнэ тооцоолно уу.';
         }
       }
     }
     return e;
-  }, [type, length, height, product?.is_foam_range, foamUnitPrice]);
+  }, [type, length, height, product?.is_foam_range, foamComputedStandardUnit]);
 
   const currentErrors = useMemo(() => validate(), [validate]);
   const isValid = Object.keys(currentErrors).length === 0;
@@ -499,8 +530,16 @@ export function ProductConfigModal({
           ? codedPaintRowId
           : undefined,
       foamUnitPrice:
-        product?.is_foam_range === true && foamUnitPrice != null && Number.isFinite(foamUnitPrice)
-          ? Math.round(foamUnitPrice)
+        product?.is_foam_range === true &&
+        foamLoyaltyPricing != null &&
+        Number.isFinite(foamLoyaltyPricing.saleUnit)
+          ? Math.round(foamLoyaltyPricing.saleUnit)
+          : undefined,
+      foamStandardUnitPrice:
+        product?.is_foam_range === true &&
+        foamComputedStandardUnit != null &&
+        Number.isFinite(foamComputedStandardUnit)
+          ? Math.round(foamComputedStandardUnit)
           : undefined,
       foamTotalArea:
         product?.is_foam_range === true && foamTotalArea != null && Number.isFinite(foamTotalArea)
@@ -518,7 +557,8 @@ export function ProductConfigModal({
     codedPaintListPrice,
     codedPaintRowId,
     quantity,
-    foamUnitPrice,
+    foamLoyaltyPricing,
+    foamComputedStandardUnit,
     foamTotalArea,
   ]);
 
@@ -553,9 +593,24 @@ export function ProductConfigModal({
     }
     setTouched(allTouched);
 
-    if (!isValid || !product || !effectiveProduct) return;
+    if (!isValid || !product || !effectiveProduct || !loyaltyOverlaidEffective) return;
 
-    const productForCart: Product = { ...effectiveProduct, productType: type };
+    let productForCart: Product = { ...loyaltyOverlaidEffective, productType: type };
+    if (product.is_foam_range === true && foamLoyaltyPricing?.loyaltyPriceMode === 'v1') {
+      productForCart = {
+        ...productForCart,
+        loyaltyPriceMode: 'v1',
+        loyaltyReportWholesalePct: foamLoyaltyPricing.appliedLoyaltyPercent,
+        loyaltyReportRetailDiscountPct: undefined,
+      };
+    } else if (product.is_foam_range === true && foamLoyaltyPricing?.loyaltyPriceMode === 'v2') {
+      productForCart = {
+        ...productForCart,
+        loyaltyPriceMode: 'v2',
+        loyaltyReportRetailDiscountPct: foamLoyaltyPricing.appliedLoyaltyPercent,
+        loyaltyReportWholesalePct: undefined,
+      };
+    }
 
     // ── 1. Always add the parent item ──────────────────────────────────────
     const config: CartItemConfig = {
@@ -569,7 +624,17 @@ export function ProductConfigModal({
           ? codedPaintRowId
           : undefined,
       foamUnitPrice:
-        foamUnitPrice != null && Number.isFinite(foamUnitPrice) ? Math.round(foamUnitPrice) : undefined,
+        product?.is_foam_range === true &&
+        foamLoyaltyPricing != null &&
+        Number.isFinite(foamLoyaltyPricing.saleUnit)
+          ? Math.round(foamLoyaltyPricing.saleUnit)
+          : undefined,
+      foamStandardUnitPrice:
+        product?.is_foam_range === true &&
+        foamComputedStandardUnit != null &&
+        Number.isFinite(foamComputedStandardUnit)
+          ? Math.round(foamComputedStandardUnit)
+          : undefined,
       foamTotalArea:
         foamTotalArea != null && Number.isFinite(foamTotalArea) ? foamTotalArea : undefined,
     };
@@ -588,14 +653,30 @@ export function ProductConfigModal({
         .filter((c) => (childQtys[c.id] ?? 0) > 0)
         .forEach((c) => {
           const qty = childQtys[c.id]!;
+          const listRetail = c.retailPrice ?? c.price;
           const childProduct: Product = {
             id: c.id,
             name: c.name,
             category: product.category,
-            price: c.price,
+            price: listRetail > 0 ? listRetail : c.price,
             basePrice: c.price,
+            oldPrice:
+              (c.loyaltyPriceMode === 'v1' || c.loyaltyPriceMode === 'v2') && listRetail > c.price
+                ? listRetail
+                : undefined,
+            discount: undefined,
+            retailPrice: listRetail > 0 ? listRetail : undefined,
+            wholesalePrice: c.wholesalePrice,
+            plannedStandardBaseUnit: c.plannedStandardBaseUnit,
+            catalogDiscountPct: c.catalogDiscountPct,
+            onlineDiscountPctAtFetch: c.onlineDiscountPctAtFetch,
+            loyaltyPriceMode: c.loyaltyPriceMode,
+            loyaltyReportWholesalePct: c.loyaltyReportWholesalePct,
+            loyaltyReportRetailDiscountPct: c.loyaltyReportRetailDiscountPct,
+            brandId: c.brandId ?? product.brandId,
             stock: c.stock,
             imageUrl: c.imageUrl,
+            images: c.images,
             productType: 1,
             store_id: product.store_id,
             receivedPrice:
@@ -618,10 +699,10 @@ export function ProductConfigModal({
 
   if (!mounted || !product || !effectiveProduct) return null;
 
-  const basePrice = getBasePrice(effectiveProduct);
+  const basePrice = getBasePrice(loyaltyOverlaidEffective ?? effectiveProduct);
   const summaryUnitPrice =
     type === 4
-      ? getType4UnitPrice(effectiveProduct, {
+      ? getType4UnitPrice(loyaltyOverlaidEffective ?? effectiveProduct, {
           colorCode: colorCode || undefined,
           codedPaintListPrice,
         })
@@ -686,6 +767,23 @@ export function ProductConfigModal({
                 className="w-full h-full object-cover"
               />
 
+              {product.is_foam_range &&
+                foamComputedStandardUnit != null &&
+                foamLoyaltyPricing != null &&
+                foamCatalogDiscountPercent(
+                  foamComputedStandardUnit,
+                  foamLoyaltyPricing.saleUnit,
+                ) > 0 && (
+                  <span className="absolute top-1 left-1 bg-red-500 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded pointer-events-none shadow-sm">
+                    −
+                    {foamCatalogDiscountPercent(
+                      foamComputedStandardUnit,
+                      foamLoyaltyPricing.saleUnit,
+                    )}
+                    %
+                  </span>
+                )}
+
               {/* Counter badge — only when product has multiple images */}
               {imageTotal > 1 && (
                 <span className="absolute top-1 right-1 bg-black/60 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-full leading-none pointer-events-none">
@@ -698,11 +796,38 @@ export function ProductConfigModal({
               <p className="text-sm font-semibold text-gray-900 line-clamp-2 leading-snug">
                 {effectiveProduct.name}
               </p>
-              {/* Unit price — type 3: нэгж үнэ «Бодох»-оос */}
-              {type === 3 && product.is_foam_range && foamUnitPrice != null ? (
-                <p className="text-sm font-semibold text-blue-600 mt-1">
-                  Нэгж үнэ: ₮{Math.round(foamUnitPrice).toLocaleString()}
-                </p>
+              {/* Unit price — type 3 хөөс: стандарт «Бодох» + V1/V2 */}
+              {type === 3 &&
+              product.is_foam_range &&
+              foamComputedStandardUnit != null &&
+              foamLoyaltyPricing != null ? (
+                <div className="mt-1 space-y-0.5">
+                  {foamCatalogDiscountPercent(
+                    foamComputedStandardUnit,
+                    foamLoyaltyPricing.saleUnit,
+                  ) > 0 ? (
+                    <>
+                      <p className="text-xs text-gray-400 line-through">
+                        Стандарт нэгж: ₮{Math.round(foamComputedStandardUnit).toLocaleString()}
+                      </p>
+                      <p className="text-sm font-semibold text-blue-600">
+                        Нэгж үнэ: ₮{Math.round(foamLoyaltyPricing.saleUnit).toLocaleString()}
+                      </p>
+                      <p className="text-[11px] font-semibold text-red-500">
+                        Хөнгөлөлт: −
+                        {foamCatalogDiscountPercent(
+                          foamComputedStandardUnit,
+                          foamLoyaltyPricing.saleUnit,
+                        )}
+                        %
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm font-semibold text-blue-600 mt-1">
+                      Нэгж үнэ: ₮{Math.round(foamLoyaltyPricing.saleUnit).toLocaleString()}
+                    </p>
+                  )}
+                </div>
               ) : type !== 3 ? (
                 <p className="text-sm font-semibold text-blue-600 mt-1">
                   ₮{summaryUnitPrice.toLocaleString()}
@@ -740,7 +865,7 @@ export function ProductConfigModal({
                   onChange={(v) => {
                     setHeight(v);
                     touch('height');
-                    setFoamUnitPrice(null);
+                    setFoamComputedStandardUnit(null);
                     setFoamTotalArea(null);
                     setFoamCalcError(null);
                     if (product?.is_foam_range === true && foamRatio != null && !widthTouchedRef.current) {
@@ -771,7 +896,7 @@ export function ProductConfigModal({
                         value={width}
                         onChange={(e) => {
                           widthTouchedRef.current = true;
-                          setFoamUnitPrice(null);
+                          setFoamComputedStandardUnit(null);
                           setFoamTotalArea(null);
                           setFoamCalcError(null);
                           setWidth(e.target.value.replace(/[^0-9.]/g, ''));
@@ -821,14 +946,14 @@ export function ProductConfigModal({
                         const tier = findFoamTierForArea(ranges, totalArea);
                         if (!tier) {
                           setFoamCalcError('Нийт талбайд тохирох интервал олдсонгүй.');
-                          setFoamUnitPrice(null);
+                          setFoamComputedStandardUnit(null);
                           setFoamTotalArea(null);
                           return;
                         }
 
                         const unit = Math.round(totalArea * tier.price);
                         setFoamTotalArea(totalArea);
-                        setFoamUnitPrice(unit);
+                        setFoamComputedStandardUnit(unit);
                       }}
                       className="flex-1 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold transition-colors"
                     >

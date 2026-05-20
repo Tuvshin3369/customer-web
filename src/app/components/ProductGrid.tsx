@@ -1,12 +1,23 @@
 import { ProductCard } from './ProductCard';
 import { Product } from '../types';
+import {
+  loyaltyPreviewPercentForProductBrand,
+  type CustomerLoyaltyContext,
+} from '../lib/customerLoyaltyContext';
 
 interface ProductGridProps {
   products: Product[];
   onConfigureProduct: (product: Product) => void;
+  isLoggedIn?: boolean;
+  loyaltyContext?: CustomerLoyaltyContext | null;
 }
 
-export function ProductGrid({ products, onConfigureProduct }: ProductGridProps) {
+export function ProductGrid({
+  products,
+  onConfigureProduct,
+  isLoggedIn = false,
+  loyaltyContext = null,
+}: ProductGridProps) {
   if (products.length === 0) {
     return (
       <div className="bg-gray-50">
@@ -29,13 +40,22 @@ export function ProductGrid({ products, onConfigureProduct }: ProductGridProps) 
           className="grid gap-3 justify-start"
           style={{ gridTemplateColumns: 'repeat(auto-fill, 160px)' }}
         >
-          {products.map((product) => (
-            <ProductCard
-              key={product.id}
-              product={product}
-              onConfigureProduct={onConfigureProduct}
-            />
-          ))}
+          {products.map((product) => {
+            const foamLoyaltyPreviewPercent =
+              isLoggedIn &&
+              loyaltyContext &&
+              product.is_foam_range === true
+                ? loyaltyPreviewPercentForProductBrand(product.brandId, loyaltyContext)
+                : undefined;
+            return (
+              <ProductCard
+                key={product.id}
+                product={product}
+                onConfigureProduct={onConfigureProduct}
+                foamLoyaltyPreviewPercent={foamLoyaltyPreviewPercent ?? undefined}
+              />
+            );
+          })}
         </div>
       </div>
     </div>

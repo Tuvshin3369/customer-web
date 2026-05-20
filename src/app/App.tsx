@@ -27,6 +27,19 @@ import { ApplicationPage } from './components/ApplicationPage';
 import { Product, CartItem, ChildProduct, FoamRangeRow } from './types';
 import { calculateTotal } from './utils/priceCalc';
 import { DELIVERY_SERVICE_CART_ITEM_ID } from './lib/deliveryServiceCart';
+import { fetchCustomerIdForAnket } from './lib/anketApi';
+import {
+  EMPTY_CUSTOMER_LOYALTY_CONTEXT,
+  fetchCustomerLoyaltyContext,
+  type CustomerLoyaltyContext,
+} from './lib/customerLoyaltyContext';
+import {
+  applyLoyaltyToProduct,
+  applyFoamCatalogUnitToLoyalty,
+  freezeCatalogStandardProductTree,
+  plannedStandardSaleBaseFromRetail,
+  repricedProductForLoyalty,
+} from './utils/customerPrivilegedPricing';
 
 const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
 
@@ -204,13 +217,14 @@ const RELATED_PRODUCT_KEYS = [
 ] as const;
 
 const PRODUCTS_LIST_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,is_service,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,wholesale_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,is_service,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function mapRowToChildProduct(
   row: Record<string, unknown>,
   pid: string,
   onlinePct: number,
   stock: number,
+  catalogStoreId: string | null | undefined,
 ): ChildProduct | null {
   const nm =
     typeof row.product_name === 'string'
@@ -220,15 +234,28 @@ function mapRowToChildProduct(
   const imageUrls = allUrlsFromProductImages(row.product_images);
   const img = imageUrls[0] || 'https://via.placeholder.com/400x500?text=No+Image';
   const retail = numField(row.retail_price, 0);
+  const wholesale = numField(row.wholesale_price, 0);
+  const bid = row.brand_id != null && row.brand_id !== '' ? String(row.brand_id) : undefined;
   const productDisc = numField(row.discount, 0);
+  const plannedStd = plannedStandardSaleBaseFromRetail(retail, productDisc, onlinePct);
   const totalDisc = Math.min(100, Math.max(0, productDisc + onlinePct));
   const hasDisc = totalDisc > 0 && retail > 0;
-  const price = hasDisc ? Math.round(retail * (1 - totalDisc / 100)) : retail;
+  const saleUnit = hasDisc ? plannedStd : retail;
   return {
     id: pid,
     name: nm,
     stock,
-    price,
+    price: saleUnit,
+    retailPrice: retail,
+    wholesalePrice: wholesale > 0 ? wholesale : undefined,
+    plannedStandardBaseUnit: plannedStd,
+    catalogDiscountPct: productDisc,
+    onlineDiscountPctAtFetch: onlinePct,
+    brandId: bid,
+    store_id:
+      catalogStoreId != null && String(catalogStoreId).trim() !== ''
+        ? String(catalogStoreId).trim()
+        : undefined,
     receivedPrice: numField(row.received_price, 0),
     imageUrl: img,
     images: imageUrls.length > 0 ? imageUrls : undefined,
@@ -574,12 +601,13 @@ export default function App() {
           const imageUrls = allUrlsFromProductImages(row.product_images);
           const img = imageUrls[0] || 'https://via.placeholder.com/400x500?text=No+Image';
           const retail = numField(row.retail_price, 0);
+          const wholesale = numField(row.wholesale_price, 0);
           const productDisc = numField(row.discount, 0);
+          const plannedStd = plannedStandardSaleBaseFromRetail(retail, productDisc, onlinePct);
           const totalDiscRaw = productDisc + onlinePct;
           const totalDisc = Math.min(100, Math.max(0, totalDiscRaw));
           const hasDisc = totalDisc > 0 && retail > 0;
-          const saleUnit = hasDisc ? retail * (1 - totalDisc / 100) : retail;
-          const saleRounded = Math.round(saleUnit);
+          const saleUnit = hasDisc ? plannedStd : retail;
           const manualRaw =
             typeof row.product_manual === 'string' ? row.product_manual.trim() : '';
           const manualUrl = manualRaw.length > 0 ? manualRaw : undefined;
@@ -602,6 +630,7 @@ export default function App() {
               rid,
               onlinePct,
               balanceByProduct[rid] ?? 0,
+              selectedStoreId,
             );
             if (child) children.push(child);
           }
@@ -634,9 +663,14 @@ export default function App() {
             name: nm,
             category: 'Бусад',
             price: retail,
-            basePrice: hasDisc ? saleRounded : retail,
+            basePrice: hasDisc ? saleUnit : retail,
             oldPrice: hasDisc ? retail : undefined,
             discount: hasDisc ? Math.round(totalDisc * 100) / 100 : undefined,
+            retailPrice: retail,
+            wholesalePrice: wholesale > 0 ? wholesale : undefined,
+            plannedStandardBaseUnit: plannedStd,
+            catalogDiscountPct: productDisc,
+            onlineDiscountPctAtFetch: onlinePct,
             stock: balanceByProduct[pid] ?? 0,
             imageUrl: img,
             images: imageUrls.length > 0 ? imageUrls : undefined,
@@ -696,6 +730,93 @@ export default function App() {
   /** `customers.is_worker` — зөвхөн true үед «Анкет» цэс */
   const [loggedInUserIsWorker, setLoggedInUserIsWorker] = useState(false);
 
+  /** V1/V2 давуу эрх — REST-ээс бөөндэнэ */
+  const [loyaltyCtx, setLoyaltyCtx] = useState<CustomerLoyaltyContext>(EMPTY_CUSTOMER_LOYALTY_CONTEXT);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!isLoggedIn) {
+      setLoyaltyCtx(EMPTY_CUSTOMER_LOYALTY_CONTEXT);
+      return;
+    }
+    const rawUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const rawKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!rawUrl?.trim() || !rawKey?.trim()) return;
+
+    void (async () => {
+      const cid = await fetchCustomerIdForAnket({
+        phone: loggedInUserPhone,
+        googleId: loggedInUserGoogleId,
+      });
+      if (cancelled) return;
+      if (!cid?.trim()) {
+        setLoyaltyCtx({ privilegesByBrand: {} });
+        return;
+      }
+      const ctx = await fetchCustomerLoyaltyContext(rawUrl, rawKey, cid.trim());
+      if (!cancelled) setLoyaltyCtx(ctx);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, loggedInUserPhone, loggedInUserGoogleId]);
+
+  const displayProductsWithLoyalty = useMemo(
+    () => products.map((p) => applyLoyaltyToProduct(p, isLoggedIn ? loyaltyCtx : null)),
+    [products, loyaltyCtx, isLoggedIn],
+  );
+
+  /** Нэвтрэлтийн дараа сагсын мөрийн үнийг давуу эрхөөр шинэчилнэ */
+  useEffect(() => {
+    setCartItems((prev) =>
+      prev.map((item) => {
+        if (item.product.is_service === true || item.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID) {
+          return item;
+        }
+
+        const foamStd = item.config.foamStandardUnitPrice;
+        if (
+          item.product.is_foam_range === true &&
+          foamStd != null &&
+          Number.isFinite(foamStd)
+        ) {
+          const frozen = freezeCatalogStandardProductTree(item.product);
+          const foamRes = applyFoamCatalogUnitToLoyalty(
+            foamStd,
+            frozen.brandId,
+            isLoggedIn ? loyaltyCtx : null,
+          );
+          const nextProd = {
+            ...frozen,
+            ...(foamRes.loyaltyPriceMode === 'v1'
+              ? {
+                  loyaltyPriceMode: 'v1' as const,
+                  loyaltyReportWholesalePct: foamRes.appliedLoyaltyPercent,
+                  loyaltyReportRetailDiscountPct: undefined,
+                }
+              : foamRes.loyaltyPriceMode === 'v2'
+                ? {
+                    loyaltyPriceMode: 'v2' as const,
+                    loyaltyReportRetailDiscountPct: foamRes.appliedLoyaltyPercent,
+                    loyaltyReportWholesalePct: undefined,
+                  }
+                : {}),
+          };
+          const nextConfig = {
+            ...item.config,
+            foamUnitPrice: foamRes.saleUnit,
+          };
+          const tp = calculateTotal(nextProd, nextConfig, item.quantity);
+          return { ...item, product: nextProd, config: nextConfig, totalPrice: tp };
+        }
+
+        const nextProd = repricedProductForLoyalty(item.product, isLoggedIn ? loyaltyCtx : null);
+        const tp = calculateTotal(nextProd, item.config, item.quantity);
+        return { ...item, product: nextProd, totalPrice: tp };
+      }),
+    );
+  }, [isLoggedIn, loyaltyCtx]);
+
   function handleLoginSuccess(ctx?: {
     phoneDisplay: string;
     phone?: number;
@@ -724,6 +845,7 @@ export default function App() {
     setLoggedInUserPhone(null);
     setLoggedInUserGoogleId(null);
     setLoggedInUserIsWorker(false);
+    setLoyaltyCtx(EMPTY_CUSTOMER_LOYALTY_CONTEXT);
   }
 
   function handleOpenProfile() {
@@ -885,14 +1007,14 @@ export default function App() {
 
   const productsLabeled = useMemo(
     () =>
-      products
+      displayProductsWithLoyalty
         .filter((p) => !p.is_service)
         .map((p) => {
           const cid = p.categoryId != null && p.categoryId !== '' ? String(p.categoryId) : '';
           const label = cid && categoryNameById[cid] ? categoryNameById[cid] : 'Бусад';
           return { ...p, category: label };
         }),
-    [products, categoryNameById],
+    [displayProductsWithLoyalty, categoryNameById],
   );
 
   const categoryNames = useMemo(
@@ -1047,6 +1169,8 @@ export default function App() {
       <ProductGrid
         products={filteredProducts}
         onConfigureProduct={handleConfigureProduct}
+        isLoggedIn={isLoggedIn}
+        loyaltyContext={loyaltyCtx}
       />
 
       {/* ── Bottom navigation (hidden on lg+) ────────────────────────────── */}
@@ -1142,6 +1266,7 @@ export default function App() {
         storeId={selectedStoreId}
         brandId={selectedBrandId || undefined}
         onlineDiscountPercent={selectedBrandOnlineDiscount}
+        loyaltyContext={isLoggedIn ? loyaltyCtx : null}
       />
       <ChildSelectionModal
         parentProduct={parentProduct}

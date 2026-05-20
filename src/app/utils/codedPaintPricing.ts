@@ -3,11 +3,12 @@
  * @see Admin-web/src/components/SaleForm.tsx
  */
 import type { Product } from '../types';
+import { plannedStandardSaleBaseFromRetail } from './customerPrivilegedPricing';
 
 const PLACEHOLDER = 'https://via.placeholder.com/400x500?text=No+Image';
 
 const RESOLVED_PRODUCT_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,wholesale_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function numField(v: unknown, fallback = 0): number {
   const n = Number(v);
@@ -69,12 +70,13 @@ function mapRowToProduct(
   const imageUrls = allUrlsFromProductImages(row.product_images);
   const img = imageUrls[0] || PLACEHOLDER;
   const retail = numField(row.retail_price, 0);
+  const wholesale = numField(row.wholesale_price, 0);
   const productDisc = numField(row.discount, 0);
+  const plannedStd = plannedStandardSaleBaseFromRetail(retail, productDisc, onlinePct);
   const totalDiscRaw = productDisc + onlinePct;
   const totalDisc = Math.min(100, Math.max(0, totalDiscRaw));
   const hasDisc = totalDisc > 0 && retail > 0;
-  const saleUnit = hasDisc ? retail * (1 - totalDisc / 100) : retail;
-  const saleRounded = Math.round(saleUnit);
+  const saleRounded = hasDisc ? plannedStd : retail;
   const manualRaw =
     typeof row.product_manual === 'string' ? row.product_manual.trim() : '';
   const manualUrl = manualRaw.length > 0 ? manualRaw : undefined;
@@ -109,6 +111,11 @@ function mapRowToProduct(
     basePrice: hasDisc ? saleRounded : retail,
     oldPrice: hasDisc ? retail : undefined,
     discount: hasDisc ? Math.round(totalDisc * 100) / 100 : undefined,
+    retailPrice: retail,
+    wholesalePrice: wholesale > 0 ? wholesale : undefined,
+    plannedStandardBaseUnit: plannedStd,
+    catalogDiscountPct: productDisc,
+    onlineDiscountPctAtFetch: onlinePct,
     stock,
     imageUrl: img,
     images: imageUrls.length > 0 ? imageUrls : undefined,

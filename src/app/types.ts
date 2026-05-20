@@ -20,7 +20,22 @@ export interface ChildProduct {
   id: number | string;
   name: string;
   stock: number;
+  /** Нэгж зарах үнэ (сонгосон давуу эрхтэй) */
   price: number;
+  /** products.retail_price — бүдэг суурь V1/V2 үед */
+  retailPrice?: number;
+  plannedStandardBaseUnit?: number;
+  wholesalePrice?: number;
+  catalogDiscountPct?: number;
+  onlineDiscountPctAtFetch?: number;
+  loyaltyPriceMode?: 'v1' | 'v2';
+  /** online_orders.wholesale_discount_percent — V1: customer_status.wholesale_price */
+  loyaltyReportWholesalePct?: number;
+  /** online_orders.product_discount_percent — V2: discounts.discount_percent */
+  loyaltyReportRetailDiscountPct?: number;
+  brandId?: string;
+  store_id?: string;
+  categoryId?: string;
   /** products.received_price */
   receivedPrice?: number;
   imageUrl: string;
@@ -36,11 +51,25 @@ export interface Product {
   displayOrder?: number;
   name: string;
   category: string;
-  price: number;       // display / original price (kept for backward compat)
+  /** Дэлгэцэнд суурь жагсаалтын үнэ — ихэвчлэн products.retail_price */
+  price: number;
   basePrice?: number;  // unit price used for calculations; falls back to price
   oldPrice?: number;
-  /** Нийт хөнгөлөлтийн хувь (барааны discount + брэндийн online_discount_percent) */
+  /** Нийт хөнгөлөлтийн хувь (барааны discount + брэндийн online_discount_percent) — V1/V2 үед үл хэрэглэнэ */
   discount?: number;
+  /** Хувийн V1/V2 үед */
+  loyaltyPriceMode?: 'v1' | 'v2';
+  /** DB-с: дэлгэцийн даавуу жагсаалт (товчлуурын хямдрал % тооцоолох) */
+  retailPrice?: number;
+  wholesalePrice?: number;
+  /** Барааны discount + онлайн (loyalty-с өмнө) — онлайн захиалгын system_price нэгж */
+  plannedStandardBaseUnit?: number;
+  catalogDiscountPct?: number;
+  onlineDiscountPctAtFetch?: number;
+  /** Тайланд: V1 давуу хувь (customer_status.wholesale_price) */
+  loyaltyReportWholesalePct?: number;
+  /** Тайланд: V2 loyalty tier хувь (discounts.discount_percent) */
+  loyaltyReportRetailDiscountPct?: number;
   stock: number;
   imageCount?: number;
   imageUrl: string;
@@ -88,6 +117,8 @@ export interface CartItemConfig {
   codedPaintId?: string;
   /** is_foam_range: «Бодох»-ийн дараах нэгж үнэ (1 ширхэг) */
   foamUnitPrice?: number;
+  /** is_foam_range: «Бодох»-ийн үр дүн — V1/V2-с өмнөх стандарт нэгж (system_price суурь) */
+  foamStandardUnitPrice?: number;
   /** is_foam_range: өндөр×өргөн×waste */
   foamTotalArea?: number;
 }
