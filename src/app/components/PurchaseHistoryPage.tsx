@@ -14,6 +14,7 @@ import { PaymentInfoCard }                 from './PaymentInfoCard';
 import {
   fetchSalesPurchaseHistoryGrouped,
   type PurchaseHistoryGroupedSale,
+  type PurchaseSaleBankInfo,
 } from '../lib/salesPurchaseHistoryFetch';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -29,6 +30,7 @@ interface HistoryItem {
   creditType:   CreditType;
   creditAmount?: number;  // only for 'partial'
   products:     HistoryProduct[];
+  bankInfo?:    PurchaseSaleBankInfo;
 }
 
 
@@ -72,6 +74,7 @@ function groupedSaleToHistoryItem(row: PurchaseHistoryGroupedSale): HistoryItem 
     creditType: row.creditType,
     creditAmount: row.creditAmount,
     products: row.products,
+    bankInfo: row.bankInfo,
   };
 }
 
@@ -423,10 +426,10 @@ function HistoryCard({
 
             {/* 2. Дансны мэдээлэл */}
             <PaymentInfoCard
-              bankName="Хаан Банк"
-              accountHolder="Modern UI LLC"
-              accountNumber="5001234567"
-              transferNote={item.phone}
+              bankName={item.bankInfo?.bankName ?? '—'}
+              accountHolder={item.bankInfo?.accountHolder ?? '—'}
+              accountNumber={item.bankInfo?.accountNumber ?? '—'}
+              transferNote={item.phone || undefined}
             />
 
             {/* 3. Захиалгын дүн */}

@@ -10,7 +10,11 @@
  * RLS: `sales` дээр anon SELECT харилцагчийн `customer_id`-аар шүүх policy шаардлагатай.
  */
 
-import { resolveCustomerIdForOnlineOrder } from './customersRegister';
+import {
+  fetchCustomerProfileByGoogleId,
+  fetchCustomerProfileByPhone,
+  resolveCustomerIdForOnlineOrder,
+} from './customersRegister';
 
 export type PurchaseCreditType = 'paid' | 'partial' | 'credit';
 
@@ -18,6 +22,13 @@ export interface PurchaseHistorySaleProduct {
   name: string;
   quantity: number;
   price: number;
+}
+
+/** Зээл товчны панел — дансны мэдээлэл (гол салбар) */
+export interface PurchaseSaleBankInfo {
+  bankName: string;
+  accountHolder: string;
+  accountNumber: string;
 }
 
 /** UI / print-тай тохируулсан нэг захиалга (sales мөрүүдийн бүлэг) */
@@ -30,6 +41,8 @@ export interface PurchaseHistoryGroupedSale {
   creditType: PurchaseCreditType;
   creditAmount?: number;
   products: PurchaseHistorySaleProduct[];
+  /** Зээл товч дарахад PaymentInfoCard-д */
+  bankInfo?: PurchaseSaleBankInfo;
 }
 
 interface SupabaseEnv {
@@ -372,6 +385,146 @@ async function fetchProductsStoreAndName(
   return { storeByPid, nameByPid };
 }
 
+/** branch_id → store_id (зээлийн дансны гол салбар сонгоход) */
+async function fetchBranchStoreIdByIds(
+  env: SupabaseEnv,
+  ids: string[],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (ids.length === 0) return out;
+  const headers = restGetHeaders(env.anonKey);
+  for (let i = 0; i < ids.length; i += FETCH_CHUNK) {
+    const chunk = ids.slice(i, i + FETCH_CHUNK);
+    const q = new URLSearchParams({
+      select: 'id,store_id',
+      id: `in.(${chunk.join(',')})`,
+    });
+    try {
+      const res = await fetch(`${env.restBase}/rest/v1/branches?${q.toString()}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok || !Array.isArray(json)) continue;
+      for (const row of json as Record<string, unknown>[]) {
+        const id = row.id != null ? String(row.id) : '';
+        const sid =
+          row.store_id != null && String(row.store_id).trim()
+            ? String(row.store_id).trim()
+            : '';
+        if (id && sid) out[id] = sid;
+      }
+    } catch {
+      /* */
+    }
+  }
+  return out;
+}
+
+function resolveStoreIdForRow(
+  row: Record<string, unknown>,
+  branchStoreById: Record<string, string>,
+  branchByEmp: Record<string, string>,
+  storeByEmp: Record<string, string>,
+  storeByPid: Record<string, string>,
+): string {
+  const direct =
+    row.store_id != null && String(row.store_id).trim()
+      ? String(row.store_id).trim()
+      : '';
+  if (direct) return direct;
+
+  const bid = row.branch_id != null ? String(row.branch_id).trim() : '';
+  if (bid && branchStoreById[bid]) return branchStoreById[bid];
+
+  const eid = row.employee_id != null ? String(row.employee_id).trim() : '';
+  if (eid) {
+    const eb = branchByEmp[eid];
+    if (eb && branchStoreById[eb]) return branchStoreById[eb];
+    const es = storeByEmp[eid];
+    if (es) return es;
+  }
+
+  const pid = row.product_id != null ? String(row.product_id).trim() : '';
+  if (pid && storeByPid[pid]) return storeByPid[pid];
+
+  return '';
+}
+
+/** Зочин эсвэл register хоосон → хувийн данс, бусад → байгууллагын данс */
+async function fetchCustomerHasCompanyRegister(params: {
+  isLoggedIn: boolean;
+  phone: number | null;
+  googleId: string | null;
+}): Promise<boolean> {
+  if (!params.isLoggedIn) return false;
+  try {
+    const gid = params.googleId?.trim();
+    if (gid) {
+      const s = await fetchCustomerProfileByGoogleId(gid);
+      return (s.register?.trim() ?? '').length > 0;
+    }
+    if (params.phone != null && params.phone > 0) {
+      const s = await fetchCustomerProfileByPhone(params.phone);
+      return (s.register?.trim() ?? '').length > 0;
+    }
+  } catch {
+    /* */
+  }
+  return false;
+}
+
+/**
+ * Дэлгүүр бүрийн `branches.is_main_branch=true` салбараас дансны мэдээлэл.
+ * usePersonalAccount: зочин эсвэл customers.register=null
+ */
+async function fetchMainBranchBankByStoreIds(
+  env: SupabaseEnv,
+  storeIds: string[],
+  usePersonalAccount: boolean,
+): Promise<Record<string, PurchaseSaleBankInfo>> {
+  const out: Record<string, PurchaseSaleBankInfo> = {};
+  if (storeIds.length === 0) return out;
+  const headers = restGetHeaders(env.anonKey);
+
+  for (let i = 0; i < storeIds.length; i += FETCH_CHUNK) {
+    const chunk = storeIds.slice(i, i + FETCH_CHUNK);
+    const q = new URLSearchParams({
+      select:
+        'store_id,personal_name,personal_bank,personal_account,company_name,company_bank,company_account',
+      store_id: `in.(${chunk.join(',')})`,
+      is_main_branch: 'eq.true',
+    });
+    try {
+      const res = await fetch(`${env.restBase}/rest/v1/branches?${q.toString()}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok || !Array.isArray(json)) continue;
+      for (const row of json as Record<string, unknown>[]) {
+        const sid = row.store_id != null ? String(row.store_id).trim() : '';
+        if (!sid || out[sid]) continue;
+        const pick = (k: string): string => {
+          const v = row[k];
+          return typeof v === 'string' ? v.trim() : v != null ? String(v).trim() : '';
+        };
+        const accountHolder = usePersonalAccount
+          ? pick('personal_name')
+          : pick('company_name');
+        const bankName = usePersonalAccount ? pick('personal_bank') : pick('company_bank');
+        const accountNumber = usePersonalAccount
+          ? pick('personal_account')
+          : pick('company_account');
+        if (accountHolder || bankName || accountNumber) {
+          out[sid] = {
+            accountHolder: accountHolder || '—',
+            bankName: bankName || '—',
+            accountNumber: accountNumber || '—',
+          };
+        }
+      }
+    } catch {
+      /* */
+    }
+  }
+  return out;
+}
+
 function resolveStoreNameForRow(
   row: Record<string, unknown>,
   branchNames: Record<string, string>,
@@ -464,16 +617,34 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
     rows.map((r) => (r.product_id != null ? String(r.product_id).trim() : '')).filter(Boolean),
   )];
 
-  const [branchNames, empHints, prodHints] = await Promise.all([
-    fetchBranchesByIds(env, branchIds),
-    fetchEmployeesBranchHints(env, empIds),
-    fetchProductsStoreAndName(env, prodIds),
-  ]);
+  const usePersonalBank = !params.isLoggedIn;
+
+  const [branchNames, branchStoreById, empHints, prodHints, hasCompanyRegister] =
+    await Promise.all([
+      fetchBranchesByIds(env, branchIds),
+      fetchBranchStoreIdByIds(env, branchIds),
+      fetchEmployeesBranchHints(env, empIds),
+      fetchProductsStoreAndName(env, prodIds),
+      usePersonalBank
+        ? Promise.resolve(false)
+        : fetchCustomerHasCompanyRegister({
+            isLoggedIn: params.isLoggedIn,
+            phone: params.phone,
+            googleId: params.googleId,
+          }),
+    ]);
 
   const storeIdSet = new Set<string>(
-    [...Object.values(prodHints.storeByPid), ...Object.values(empHints.storeByEmp)].filter(Boolean),
+    [
+      ...Object.values(prodHints.storeByPid),
+      ...Object.values(empHints.storeByEmp),
+      ...Object.values(branchStoreById),
+    ].filter(Boolean),
   );
-  const storeNames = await fetchStoresByIds(env, [...storeIdSet]);
+  const [storeNames, bankByStoreId] = await Promise.all([
+    fetchStoresByIds(env, [...storeIdSet]),
+    fetchMainBranchBankByStoreIds(env, [...storeIdSet], usePersonalBank || !hasCompanyRegister),
+  ]);
 
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const raw of rows) {
@@ -532,6 +703,21 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
 
     const { creditType, creditAmount } = inferCredit(head, orderTotalR);
 
+    let bankInfo: PurchaseSaleBankInfo | undefined;
+    for (const r of arr) {
+      const sid = resolveStoreIdForRow(
+        r,
+        branchStoreById,
+        empHints.branchByEmp,
+        empHints.storeByEmp,
+        prodHints.storeByPid,
+      );
+      if (sid && bankByStoreId[sid]) {
+        bankInfo = bankByStoreId[sid];
+        break;
+      }
+    }
+
     const rowIdCanon =
       typeof head.id === 'string'
         ? head.id.replace(/-/g, '').toUpperCase()
@@ -558,6 +744,7 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
       creditAmount,
       note: noteJoined || undefined,
       products,
+      bankInfo,
     });
   }
 
