@@ -491,7 +491,7 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
               <div className="w-full max-w-[360px] bg-white rounded-2xl shadow-sm border border-gray-100 p-5 space-y-4">
                 <div>
                   <label className="block text-xs font-medium text-gray-600 mb-1.5">
-                    Утасны дугаар
+                    Захиалга авах хүний утасны дугаар
                   </label>
                   <div className={`flex items-center gap-2.5 border rounded-xl px-3.5 py-3 transition-colors ${
                     phoneErr ? 'border-red-400 bg-red-50' : 'border-gray-200 bg-gray-50 focus-within:border-blue-500 focus-within:bg-white'
