@@ -36,5 +36,15 @@ alter table public.online_orders enable row level security;
 drop policy if exists "anon_can_insert_online_orders" on public.online_orders;
 create policy "anon_can_insert_online_orders" on public.online_orders for insert to anon with check (true);
 
+-- «Миний захиалгууд» дэлгэц: customer_id-аар filter хийнэ. anon SELECT-ийг
+-- нээхгүй бол бүх мөр хоосон ирж демогүй жагсаалт харуулна.
+-- PRODUCTION-д JWT-тэй RLS эсвэл SECURITY DEFINER RPC ашиглах нь зөв.
+drop policy if exists "anon_can_select_online_orders" on public.online_orders;
+create policy "anon_can_select_online_orders" on public.online_orders for select to anon using (true);
+
+-- «Устгах» товчны үйлдэл: customer-web мөрийг устгана.
+drop policy if exists "anon_can_delete_online_orders" on public.online_orders;
+create policy "anon_can_delete_online_orders" on public.online_orders for delete to anon using (true);
+
 -- Аль хэдийн байгаа хүснэгтэд is_pigment нэмэх:
 -- alter table public.online_orders add column if not exists is_pigment boolean not null default false;

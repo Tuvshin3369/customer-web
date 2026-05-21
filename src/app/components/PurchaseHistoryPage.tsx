@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -11,6 +11,10 @@ import { PurchaseHistoryPrint }            from './print/PurchaseHistoryPrint';
 import { buildGroupedPurchaseData }        from '../../lib/print/buildPurchaseData';
 import type { GroupedPrintData }           from '../../lib/print/buildPurchaseData';
 import { PaymentInfoCard }                 from './PaymentInfoCard';
+import {
+  fetchSalesPurchaseHistoryGrouped,
+  type PurchaseHistoryGroupedSale,
+} from '../lib/salesPurchaseHistoryFetch';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface HistoryProduct { name: string; quantity: number; price: number; }
@@ -27,393 +31,6 @@ interface HistoryItem {
   products:     HistoryProduct[];
 }
 
-// ── Mock data ─────────────────────────────────────────────────────────────────
-// 40 records — 2025.01.02 → 2025.02.28.
-// Enough content to span multiple A4 pages so page-break behaviour
-// can be thoroughly tested via the top "Хэвлэх" button.
-const INITIAL_HISTORY: HistoryItem[] = [
-  {
-    id: 'HIST-2025-001', date: '2025.01.02 09:15',
-    store: 'Store A', phone: '99110001', creditType: 'paid',
-    note: 'Хэрэглэгч урьдчилан захиалсан. Баглаа сайн хийгээрэй.',
-    products: [
-      { name: 'Nike Air Max 270',  quantity: 2, price: 289000 },
-      { name: 'Adidas Stan Smith', quantity: 1, price: 195000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-002', date: '2025.01.03 10:30',
-    store: 'Store B', phone: '88220002', creditType: 'credit',
-    products: [
-      { name: 'MacBook Pro 14" M3 Pro', quantity: 1, price: 4200000 },
-      { name: 'AirPods Pro 2nd Gen',    quantity: 1, price:  650000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-003', date: '2025.01.05 14:00',
-    store: 'Store A', phone: '77330003',
-    creditType: 'partial', creditAmount: 350000,
-    note: 'Үлдэгдэл төлбөрийг 2025.01.20 хүртэл төлнө гэж тохиролцсон.',
-    products: [
-      { name: 'Sony WH-1000XM5',    quantity: 1, price: 450000 },
-      { name: 'JBL Flip 6',         quantity: 2, price: 180000 },
-      { name: 'Sports Socks 5-Pack',quantity: 3, price:  25000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-004', date: '2025.01.06 11:45',
-    store: 'Store B', phone: '99440004', creditType: 'paid',
-    products: [
-      { name: 'iPhone 15 Pro Max 256GB', quantity: 1, price: 2850000 },
-      { name: 'MagSafe Charger',         quantity: 2, price:   95000 },
-      { name: 'iPhone Case Premium',     quantity: 1, price:   75000 },
-      { name: 'Screen Protector',        quantity: 2, price:   35000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-005', date: '2025.01.08 15:20',
-    store: 'Store A', phone: '88550005', creditType: 'credit',
-    products: [
-      { name: 'Rolex Submariner',      quantity: 1, price: 12500000 },
-      { name: 'Cartier Love Bracelet', quantity: 1, price:  4500000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-006', date: '2025.01.10 08:00',
-    store: 'Store B', phone: '77660006', creditType: 'paid',
-    products: [
-      { name: 'Running Shoes Pro X2',   quantity: 3, price: 195000 },
-      { name: 'Sports Gym Bag',         quantity: 1, price:  89000 },
-      { name: 'Premium Cotton T-Shirt', quantity: 5, price:  45000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-007', date: '2025.01.12 16:30',
-    store: 'Store A', phone: '99770007',
-    creditType: 'partial', creditAmount: 800000,
-    note: 'Телевизийг хананд байрлуулж өгөх хүсэлт байна. Угсралтчинтай урьдчилан тохирно.',
-    products: [
-      { name: 'Samsung 65" QLED TV',  quantity: 1, price: 3200000 },
-      { name: 'Sonos Arc Soundbar',   quantity: 1, price: 1450000 },
-      { name: 'HDMI Cable 2.1',       quantity: 2, price:   45000 },
-      { name: 'TV Wall Mount',        quantity: 1, price:  180000 },
-      { name: 'Remote Control Cover', quantity: 1, price:   25000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-008', date: '2025.01.13 13:00',
-    store: 'Store B', phone: '88880008', creditType: 'paid',
-    products: [
-      { name: 'Dyson V15 Detect',  quantity: 1, price: 1800000 },
-      { name: 'Air Purifier TP09', quantity: 1, price:  950000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-009', date: '2025.01.15 10:15',
-    store: 'Store A', phone: '77990009', creditType: 'credit',
-    products: [
-      { name: 'Canon EOS R6 Mark II', quantity: 1, price: 3500000 },
-      { name: 'Canon RF 50mm f/1.8',  quantity: 1, price:  850000 },
-      { name: 'Camera Bag Pro',       quantity: 1, price:  280000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-010', date: '2025.01.16 14:45',
-    store: 'Store B', phone: '99001010',
-    creditType: 'partial', creditAmount: 1200000,
-    products: [
-      { name: 'iPad Pro 12.9"',   quantity: 1, price: 1800000 },
-      { name: 'Apple Pencil Pro', quantity: 1, price:  480000 },
-      { name: 'Magic Keyboard',   quantity: 1, price:  650000 },
-      { name: 'iPad Case',        quantity: 1, price:  120000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-011', date: '2025.01.18 09:30',
-    store: 'Store A', phone: '88111111', creditType: 'paid',
-    products: [
-      { name: 'Adidas Ultraboost 22', quantity: 2, price: 320000 },
-      { name: 'Nike Dri-FIT T-Shirt', quantity: 3, price:  65000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-012', date: '2025.01.19 12:00',
-    store: 'Store B', phone: '77221212', creditType: 'credit',
-    note: 'VIP хэрэглэгч. Бэлэглэлийн баглаа хийж, гарын үсэг зурсан карт хавсаргана уу.',
-    products: [
-      { name: 'Tiffany & Co Necklace', quantity: 1, price: 2800000 },
-      { name: 'Chanel No. 5 Parfum',   quantity: 2, price:  480000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-013', date: '2025.01.21 15:00',
-    store: 'Store A', phone: '99331313', creditType: 'paid',
-    products: [
-      { name: 'JBL Charge 5', quantity: 1, price: 250000 },
-      { name: 'JBL Flip 6',   quantity: 2, price: 180000 },
-      { name: 'AUX Cable 3m', quantity: 3, price:  15000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-014', date: '2025.01.22 11:20',
-    store: 'Store B', phone: '88441414',
-    creditType: 'partial', creditAmount: 450000,
-    products: [
-      { name: 'PS5 Console',              quantity: 1, price: 1200000 },
-      { name: 'PS5 DualSense Controller', quantity: 2, price:  280000 },
-      { name: 'FIFA 25',                  quantity: 1, price:   95000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-015', date: '2025.01.24 08:45',
-    store: 'Store A', phone: '77551515', creditType: 'paid',
-    products: [
-      { name: 'MacBook Air M2', quantity: 1, price: 2800000 },
-      { name: 'Magic Mouse',    quantity: 1, price:  195000 },
-      { name: 'USB-C Hub',      quantity: 1, price:  125000 },
-      { name: 'Laptop Stand',   quantity: 1, price:   89000 },
-      { name: 'Keyboard Cover', quantity: 2, price:   35000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-016', date: '2025.01.25 16:00',
-    store: 'Store B', phone: '99661616', creditType: 'credit',
-    products: [
-      { name: 'LG OLED 55" TV',     quantity: 1, price: 2900000 },
-      { name: 'Sonos Beam Soundbar', quantity: 1, price:  980000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-017', date: '2025.01.27 10:00',
-    store: 'Store A', phone: '88771717',
-    creditType: 'partial', creditAmount: 680000,
-    note: '2 дахь ирэлтэд Supersonic авсан. Нийт захиалгын хөнгөлөлт 5% олгосон.',
-    products: [
-      { name: 'Dyson Airwrap',    quantity: 1, price: 1500000 },
-      { name: 'Dyson Supersonic', quantity: 1, price: 1200000 },
-      { name: 'Hair Care Set',    quantity: 2, price:  180000 },
-      { name: 'Brush Kit',        quantity: 1, price:   95000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-018', date: '2025.01.28 14:30',
-    store: 'Store B', phone: '77881818', creditType: 'paid',
-    products: [
-      { name: 'Nintendo Switch OLED', quantity: 1, price: 650000 },
-      { name: 'Nintendo Game Card',   quantity: 3, price:  85000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-019', date: '2025.01.30 09:00',
-    store: 'Store A', phone: '99991919', creditType: 'credit',
-    products: [
-      { name: 'DJI Mini 4 Pro',    quantity: 1, price: 1200000 },
-      { name: 'DJI ND Filter Set', quantity: 1, price:  280000 },
-      { name: 'Extra Battery',     quantity: 2, price:  195000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-020', date: '2025.01.31 11:30',
-    store: 'Store B', phone: '88002020', creditType: 'paid',
-    products: [
-      { name: 'Samsung Galaxy S24 Ultra', quantity: 1, price: 2400000 },
-      { name: 'Samsung Galaxy Buds2',     quantity: 1, price:  320000 },
-      { name: 'Phone Case',               quantity: 2, price:   55000 },
-      { name: 'Screen Protector',         quantity: 2, price:   35000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-021', date: '2025.02.01 13:45',
-    store: 'Store A', phone: '77112121',
-    creditType: 'partial', creditAmount: 280000,
-    products: [
-      { name: 'Sony WF-1000XM5', quantity: 2, price: 320000 },
-      { name: 'Headphone Stand',  quantity: 1, price:  65000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-022', date: '2025.02.03 10:30',
-    store: 'Store B', phone: '99222222', creditType: 'paid',
-    products: [
-      { name: 'Nike Air Force 1', quantity: 3, price: 245000 },
-      { name: 'Socks Pack 10',    quantity: 2, price:  35000 },
-      { name: 'Shoe Cleaner Kit', quantity: 1, price:  45000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-023', date: '2025.02.05 15:15',
-    store: 'Store A', phone: '88332323', creditType: 'credit',
-    note: 'Камерын гэрэл зургийн студийн захиалга. Нэхэмжлэх хуулбарыг имэйлээр илгээсэн.',
-    products: [
-      { name: 'Nikon Z6 III',        quantity: 1, price: 4200000 },
-      { name: 'Nikon 24-70mm f/2.8', quantity: 1, price: 2800000 },
-      { name: 'Camera Bag XL',       quantity: 1, price:  350000 },
-      { name: 'Memory Card 256GB',   quantity: 2, price:  180000 },
-      { name: 'ND Filter Set',       quantity: 1, price:  195000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-024', date: '2025.02.06 08:30',
-    store: 'Store B', phone: '77442424', creditType: 'paid',
-    products: [
-      { name: 'GoPro Hero 12',    quantity: 1, price: 750000 },
-      { name: 'GoPro Chest Mount',quantity: 1, price:  95000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-025', date: '2025.02.08 14:00',
-    store: 'Store A', phone: '99552525',
-    creditType: 'partial', creditAmount: 550000,
-    products: [
-      { name: 'Kindle Scribe',          quantity: 2, price: 480000 },
-      { name: 'Kindle Case',            quantity: 2, price:  85000 },
-      { name: 'Premium Cotton T-Shirt', quantity: 4, price:  45000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-026', date: '2025.02.10 11:15',
-    store: 'Store B', phone: '88662626', creditType: 'paid',
-    products: [
-      { name: 'Samsung 65" QLED TV', quantity: 1, price: 3200000 },
-      { name: 'TV Wall Mount Pro',    quantity: 1, price:  220000 },
-      { name: 'HDMI Cable 4K',        quantity: 3, price:   55000 },
-      { name: 'Cable Management Kit', quantity: 1, price:   35000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-027', date: '2025.02.12 09:45',
-    store: 'Store A', phone: '77772727', creditType: 'credit',
-    products: [
-      { name: 'iPhone 15 Pro Max 256GB', quantity: 2, price: 2850000 },
-      { name: 'AirPods Pro 2nd Gen',     quantity: 2, price:  650000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-028', date: '2025.02.13 16:20',
-    store: 'Store B', phone: '99882828',
-    creditType: 'partial', creditAmount: 720000,
-    note: 'Гутлыг солих боломжтой, 7 хоногийн дотор буцааж авчирвал шинэ размертай сольж өгнө.',
-    products: [
-      { name: 'Adidas Ultraboost 22', quantity: 3, price: 320000 },
-      { name: 'Adidas Stan Smith',    quantity: 2, price: 195000 },
-      { name: 'Sports Bag',           quantity: 1, price: 125000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-029', date: '2025.02.15 12:00',
-    store: 'Store A', phone: '88992929', creditType: 'paid',
-    products: [
-      { name: 'Air Purifier TP09',  quantity: 2, price: 950000 },
-      { name: 'Filter Replacement', quantity: 4, price:  85000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-030', date: '2025.02.16 10:00',
-    store: 'Store B', phone: '77003030', creditType: 'credit',
-    products: [
-      { name: 'MacBook Pro 14" M3 Pro', quantity: 1, price: 4200000 },
-      { name: 'iPad Pro 12.9"',          quantity: 1, price: 1800000 },
-      { name: 'Magic Keyboard',          quantity: 1, price:  650000 },
-      { name: 'Apple Pencil Pro',        quantity: 1, price:  480000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-031', date: '2025.02.18 14:30',
-    store: 'Store A', phone: '99113131', creditType: 'paid',
-    products: [
-      { name: 'Running Shoes Pro X2',  quantity: 4, price: 195000 },
-      { name: 'Sports Gym Bag',        quantity: 2, price:  89000 },
-      { name: 'Water Bottle 1L',       quantity: 3, price:  35000 },
-      { name: 'Compression Socks',     quantity: 5, price:  18000 },
-      { name: 'Fitness Gloves',        quantity: 2, price:  45000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-032', date: '2025.02.19 09:15',
-    store: 'Store B', phone: '88223232',
-    creditType: 'partial', creditAmount: 920000,
-    note: 'Цагийг оригинал баглаатай, бичиг баримттай хамт хүлээлгэн өгсөн. Баталгааны хуудас хавсаргасан.',
-    products: [
-      { name: 'Rolex Submariner',    quantity: 1, price: 12500000 },
-      { name: 'Watch Strap Leather', quantity: 2, price:   180000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-033', date: '2025.02.20 11:00',
-    store: 'Store A', phone: '77333333', creditType: 'paid',
-    products: [
-      { name: 'Sony WH-1000XM5', quantity: 2, price: 450000 },
-      { name: 'JBL Charge 5',    quantity: 1, price: 250000 },
-      { name: 'Audio Cable 2m',  quantity: 2, price:  25000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-034', date: '2025.02.21 15:30',
-    store: 'Store B', phone: '99443434', creditType: 'credit',
-    products: [
-      { name: 'Cartier Love Bracelet', quantity: 1, price: 4500000 },
-      { name: 'Tiffany & Co Necklace', quantity: 1, price: 2800000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-035', date: '2025.02.23 08:00',
-    store: 'Store A', phone: '88553535',
-    creditType: 'partial', creditAmount: 480000,
-    products: [
-      { name: 'Nintendo Switch OLED', quantity: 2, price: 650000 },
-      { name: 'Nintendo Game Card',   quantity: 5, price:  85000 },
-      { name: 'Pro Controller',       quantity: 2, price: 245000 },
-      { name: 'Carrying Case',        quantity: 2, price:  65000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-036', date: '2025.02.24 13:15',
-    store: 'Store B', phone: '77663636', creditType: 'paid',
-    products: [
-      { name: 'Dyson V15 Detect',     quantity: 1, price: 1800000 },
-      { name: 'Extra Attachment Kit', quantity: 1, price:  180000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-037', date: '2025.02.25 10:45',
-    store: 'Store A', phone: '99773737', creditType: 'credit',
-    products: [
-      { name: 'Samsung Galaxy S24 Ultra', quantity: 2, price: 2400000 },
-      { name: 'Samsung Galaxy Tab S9',    quantity: 1, price: 1950000 },
-      { name: 'Galaxy Buds2 Pro',         quantity: 2, price:  380000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-038', date: '2025.02.26 14:00',
-    store: 'Store B', phone: '88883838', creditType: 'paid',
-    note: 'Спортын хэрэгслийн багц захиалга. Дараагийн удаа 10% хямдралын купон олгосон.',
-    products: [
-      { name: 'Nike Air Max 270',     quantity: 3, price: 289000 },
-      { name: 'Nike Air Force 1',     quantity: 2, price: 245000 },
-      { name: 'Nike Dri-FIT T-Shirt', quantity: 4, price:  65000 },
-      { name: 'Sports Socks 5-Pack',  quantity: 6, price:  25000 },
-      { name: 'Cap',                  quantity: 3, price:  55000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-039', date: '2025.02.27 09:30',
-    store: 'Store A', phone: '77993939',
-    creditType: 'partial', creditAmount: 380000,
-    products: [
-      { name: 'Kindle Scribe',       quantity: 1, price: 480000 },
-      { name: 'Chanel No. 5 Parfum', quantity: 1, price: 480000 },
-    ],
-  },
-  {
-    id: 'HIST-2025-040', date: '2025.02.28 16:00',
-    store: 'Store B', phone: '99004040', creditType: 'paid',
-    products: [
-      { name: 'Canon EOS R6 Mark II', quantity: 1, price: 3500000 },
-      { name: 'Canon RF 85mm f/1.2',  quantity: 1, price: 4800000 },
-      { name: 'Tripod Pro',           quantity: 1, price:  350000 },
-    ],
-  },
-];
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function fmt(n: number): string { return n.toLocaleString('en-US') + '₮'; }
@@ -424,15 +41,45 @@ function calcTotal(products: HistoryProduct[]): number {
 function fmtDate(date: string): string { return date.split(' ')[0]; }
 /** "2025.02.25 14:30" → "2025-02-25"  (ISO, for <input type="date"> comparison) */
 function toISO(date: string): string { return date.split(' ')[0].replace(/\./g, '-'); }
-/** Today as "YYYY-MM-DD" — kept for potential future use */
+/** Local calendar «YYYY-MM-DD» */
 function todayISO(): string {
   const d = new Date();
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const dd = String(d.getDate()).padStart(2, '0');
   return `${d.getFullYear()}-${mm}-${dd}`;
 }
-// suppress unused warning — used in handleReset if caller wants to reset to today
-void todayISO;
+
+/** Хоосон гэж орж ирвэл аль алинд нь «өнөөдөр» болгоно — API инклюзив хүрээ */
+function normalizeDateRangeForFetch(start: string, end: string): { from: string; to: string } {
+  const t = todayISO();
+  let from = start.trim() || t;
+  let to = end.trim() || t;
+  if (from > to) {
+    const swap = from;
+    from = to;
+    to = swap;
+  }
+  return { from, to };
+}
+
+function groupedSaleToHistoryItem(row: PurchaseHistoryGroupedSale): HistoryItem {
+  return {
+    id: row.id,
+    date: row.date,
+    store: row.store,
+    phone: row.phone,
+    note: row.note,
+    creditType: row.creditType,
+    creditAmount: row.creditAmount,
+    products: row.products,
+  };
+}
+
+function csvEscapeCell(v: string): string {
+  const s = String(v ?? '');
+  if (/[,"\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
 
 // ── Portal tooltip (appears BELOW, never clipped) ─────────────────────────────
 function Tip({ label, children }: { label: string; children: React.ReactNode }) {
@@ -1128,11 +775,20 @@ function EmptyState({ isFiltered }: { isFiltered: boolean }) {
 
 // ── Page component ────────────────────────────────────────────────────────────
 interface PurchaseHistoryPageProps {
-  isOpen:  boolean;
-  onClose: () => void;
+  isOpen:               boolean;
+  onClose:              () => void;
+  isLoggedIn:           boolean;
+  customerPhone:        number | null;
+  customerGoogleId:     string | null;
 }
 
-export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProps) {
+export function PurchaseHistoryPage({
+  isOpen,
+  onClose,
+  isLoggedIn,
+  customerPhone,
+  customerGoogleId,
+}: PurchaseHistoryPageProps) {
   const [mounted,          setMounted]          = useState(false);
   const [visible,          setVisible]          = useState(false);
   const [expandedIds,      setExpandedIds]      = useState<Set<string>>(new Set());
@@ -1140,6 +796,9 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
   const [noteModal,        setNoteModal]        = useState({ open: false, note: '' });
   const [isExporting,      setIsExporting]      = useState(false);
   const [printData,        setPrintData]        = useState<GroupedPrintData | null>(null);
+  const [fetched,          setFetched]          = useState<HistoryItem[]>([]);
+  const [fetchLoading,     setFetchLoading]     = useState(false);
+  const [fetchErr,        setFetchErr]         = useState<string | null>(null);
 
   // ── Credit-only toggle ────────────────────────────────────────────────────
   const [creditOnly, setCreditOnly] = useState(false);
@@ -1151,16 +810,15 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
     setStoreFilter(prev => (prev === store ? null : store));
   }
 
-  // ── Filter input state
-  // Default to empty so ALL 40 records are visible immediately.
-  // Users can narrow by date or product name using the filter bar.
-  const [startDate,  setStartDate]  = useState('');
-  const [endDate,    setEndDate]    = useState('');
+  // ── Filter input state — default: өнөөдөр
+  const initToday = () => todayISO();
+  const [startDate,  setStartDate]  = useState(initToday);
+  const [endDate,    setEndDate]    = useState(initToday);
   const [searchName, setSearchName] = useState('');
 
   // ── Applied filter state ──────────────────────────────────────────────────
-  const [appliedStart, setAppliedStart] = useState('');
-  const [appliedEnd,   setAppliedEnd]   = useState('');
+  const [appliedStart, setAppliedStart] = useState(initToday);
+  const [appliedEnd,   setAppliedEnd]   = useState(initToday);
   const [appliedName,  setAppliedName]  = useState('');
 
   const hasFilter = !!(appliedStart || appliedEnd || appliedName.trim());
@@ -1172,7 +830,7 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
 
   // ── Filtered list ─────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
-    return INITIAL_HISTORY.filter(item => {
+    return fetched.filter(item => {
       const iso = toISO(item.date);
       if (appliedStart && iso < appliedStart) return false;
       if (appliedEnd   && iso > appliedEnd)   return false;
@@ -1182,7 +840,7 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
       }
       return true;
     });
-  }, [appliedStart, appliedEnd, appliedName]);
+  }, [fetched, appliedStart, appliedEnd, appliedName]);
 
   // ── Credit total ──────────────────────────────────────────────────────────
   const totalCredit = useMemo(() => {
@@ -1206,17 +864,57 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
     setAppliedName(searchName);
   }
 
-  // Reset clears all filters so all 40 records are visible again
+  // Цэвэрлэх → өнөөдөр + барааны нэр хоосон
   function handleReset() {
-    setStartDate(''); setEndDate(''); setSearchName('');
-    setAppliedStart(''); setAppliedEnd(''); setAppliedName('');
+    const t = todayISO();
+    setStartDate(t); setEndDate(t);
+    setAppliedStart(t); setAppliedEnd(t);
+    setSearchName(''); setAppliedName('');
     setCreditOnly(false);
     setExpandedIds(new Set());
   }
 
   function handleExport() {
+    if (displayed.length === 0) return;
     setIsExporting(true);
-    setTimeout(() => setIsExporting(false), 1500);
+    try {
+      const header = [
+        'Захиалгын №', 'Огноо', 'Дэлгүүр', 'Утас',
+        'Бараа', 'Тоо', 'Нэгж үнэ', 'Мөрийн дүн', 'Тэмдэглэл',
+      ].join(',');
+      const rows: string[] = [header];
+      for (const item of displayed) {
+        const note = csvEscapeCell(item.note ?? '');
+        const baseRow = [
+          csvEscapeCell(item.id),
+          csvEscapeCell(fmtDate(item.date)),
+          csvEscapeCell(item.store),
+          csvEscapeCell(item.phone),
+        ];
+        for (const p of item.products) {
+          const lt = p.price * p.quantity;
+          rows.push(
+            [
+              ...baseRow,
+              csvEscapeCell(p.name),
+              String(p.quantity),
+              String(p.price),
+              String(lt),
+              note,
+            ].join(','),
+          );
+        }
+      }
+      const blob = new Blob([`\uFEFF${rows.join('\n')}`], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `hudaldan_avalt_${appliedStart || 'from'}_${appliedEnd || 'to'}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsExporting(false);
+    }
   }
 
   /** Header "Хэвлэх" — grouped PurchaseHistoryPrint */
@@ -1271,6 +969,48 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
       return () => clearTimeout(t);
     }
   }, [isOpen]);
+
+  // ── Худалдан авалтын түүх (`sales`) — шүүлтийн огнооны хязгаараар ──────────
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (!isLoggedIn) {
+      setFetched([]);
+      setFetchLoading(false);
+      setFetchErr(null);
+      return;
+    }
+
+    let cancelled = false;
+    const { from, to } = normalizeDateRangeForFetch(appliedStart, appliedEnd);
+
+    async function load() {
+      setFetchLoading(true);
+      setFetchErr(null);
+      try {
+        const rows = await fetchSalesPurchaseHistoryGrouped({
+          isLoggedIn: true,
+          phone: customerPhone,
+          googleId: customerGoogleId,
+          dateFrom: from,
+          dateTo: to,
+        });
+        if (!cancelled) setFetched(rows.map(groupedSaleToHistoryItem));
+      } catch (e) {
+        if (!cancelled) {
+          setFetched([]);
+          setFetchErr(e instanceof Error ? e.message : 'Түүх уншихад алдаа гарлаа.');
+        }
+      } finally {
+        if (!cancelled) setFetchLoading(false);
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isLoggedIn, customerPhone, customerGoogleId, appliedStart, appliedEnd]);
 
   // ── Body scroll lock ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -1345,8 +1085,8 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
           <span className="text-xs text-gray-500 bg-gray-100 rounded-full px-2.5 py-1
                            font-medium shrink-0 whitespace-nowrap">
             Нийт: {(hasFilter || creditOnly)
-              ? `${displayed.length} / ${INITIAL_HISTORY.length}`
-              : `${INITIAL_HISTORY.length} захиалга`}
+              ? `${displayed.length} / ${fetched.length > 0 ? fetched.length : '—'}`
+              : `${fetched.length} захиалга`}
           </span>
         </div>
       </div>
@@ -1374,6 +1114,15 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
             onToggleCredit={() => setCreditOnly(prev => !prev)}
             onExport={handleExport}
           />
+
+          {fetchErr && (
+            <div
+              role="alert"
+              className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 leading-relaxed"
+            >
+              {fetchErr}
+            </div>
+          )}
 
           {/* ── Active filter chips ─────────────────────────────────────────── */}
           {hasFilter && (
@@ -1441,13 +1190,17 @@ export function PurchaseHistoryPage({ isOpen, onClose }: PurchaseHistoryPageProp
           )}
 
           {/* ── History cards ───────────────────────────────────────────────── */}
-          {displayed.length === 0 ? (
+          {displayed.length === 0 && fetchLoading ? (
+            <div className="flex flex-col items-center justify-center py-24 text-center px-4 text-sm text-gray-500">
+              Уншиж байна...
+            </div>
+          ) : displayed.length === 0 ? (
             <EmptyState isFiltered={hasFilter || creditOnly} />
           ) : (
             <div className="flex flex-col gap-3">
               {displayed.map(item => (
                 <HistoryCard
-                  key={item.id}
+                  key={`${item.id}-${item.date}`}
                   item={item}
                   isExpanded={expandedIds.has(item.id)}
                   onToggle={() => toggleExpand(item.id)}

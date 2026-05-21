@@ -1278,10 +1278,16 @@ export default function App() {
       <MyOrdersPage
         isOpen={isMyOrdersOpen}
         onClose={() => setIsMyOrdersOpen(false)}
+        isLoggedIn={isLoggedIn}
+        customerPhone={loggedInUserPhone}
+        customerGoogleId={loggedInUserGoogleId}
       />
       <PurchaseHistoryPage
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
+        isLoggedIn={isLoggedIn}
+        customerPhone={loggedInUserPhone}
+        customerGoogleId={loggedInUserGoogleId}
       />
       <ForgotPasswordModal
         isOpen={isForgotPasswordOpen}

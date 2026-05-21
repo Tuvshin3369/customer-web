@@ -7,82 +7,26 @@ import {
   Store, Car, Truck, MessageSquare, Printer, Trash2, X, Package,
 } from 'lucide-react';
 import { OrderPrint, type OrderPrintData } from './print/OrderPrint';
+import {
+  fetchOnlineOrdersForCustomer,
+  deleteOnlineOrdersByIds,
+  type DeliveryType,
+  type OnlineOrderProduct,
+} from '../lib/onlineOrdersFetch';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface OrderProduct { name: string; quantity: number; price: number; }
-type DeliveryType = 'pickup' | 'taxi' | 'delivery';
+type OrderProduct = OnlineOrderProduct;
 interface Order {
   id:           string;
   date:         string;   // "YYYY.MM.DD HH:MM"
   store:        string;
-  phone:        string;   // 8 digits
+  phone:        string;
   deliveryType: DeliveryType;
   note?:        string;
   products:     OrderProduct[];
+  /** online_orders.id-ууд — устгахад ашиглана */
+  rowIds:       string[];
 }
-
-// ── Mock data ─────────────────────────────────────────────────────────────────
-const INITIAL_ORDERS: Order[] = [
-  {
-    id: 'ORD-2025-001',
-    date: '2025.02.25 14:30',
-    store: 'Store A',
-    phone: '99990001',
-    deliveryType: 'delivery',
-    note: 'Үүдэнд нь тавиад явуулна уу. Утсаар урьдчилан мэдэгдээрэй. 13 давхар, 45 тоот.',
-    products: [
-      { name: 'Nike Air Max 270 Спорт', quantity: 2, price: 289000 },
-      { name: 'Adidas Ultraboost 22 Pro', quantity: 1, price: 320000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-002',
-    date: '2025.02.24 10:15',
-    store: 'Store A',
-    phone: '88881234',
-    deliveryType: 'taxi',
-    products: [
-      { name: 'Rolex Submariner', quantity: 1, price: 12500000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-003',
-    date: '2025.02.22 16:45',
-    store: 'Store B',
-    phone: '99990003',
-    deliveryType: 'pickup',
-    note: 'Маргааш 11:00 цагт очно.',
-    products: [
-      { name: 'Sony WH-1000XM5 Чихэвч', quantity: 1, price: 450000 },
-      { name: 'JBL Flip 6 Чанга яригч', quantity: 2, price: 180000 },
-      { name: 'Premium Cotton T-Shirt', quantity: 3, price: 45000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-004',
-    date: '2025.02.20 09:00',
-    store: 'Store B',
-    phone: '77774321',
-    deliveryType: 'delivery',
-    products: [
-      { name: 'MacBook Pro 14" M3 Pro', quantity: 1, price: 4200000 },
-      { name: 'iPhone 15 Pro Max 256GB', quantity: 1, price: 2850000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-005',
-    date: '2025.02.18 13:20',
-    store: 'Store A',
-    phone: '96661111',
-    deliveryType: 'taxi',
-    note: 'Urgently needed.',
-    products: [
-      { name: 'Cartier Love Алтан бөгж', quantity: 1, price: 3500000 },
-      { name: 'Tiffany & Co Хэлхээ',     quantity: 1, price: 2800000 },
-      { name: 'Chanel No. 5 Eau de Parfum', quantity: 2, price: 480000 },
-    ],
-  },
-];
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function fmt(n: number): string {
@@ -209,33 +153,53 @@ function NoteModal({ note, onClose }: { note: string; onClose: () => void }) {
 }
 
 // ── Delete Confirm Modal ───────────────────────────────────────────────��──────
-function DeleteModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+function DeleteModal({
+  onCancel,
+  onConfirm,
+  loading = false,
+  error = null,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+  loading?: boolean;
+  error?: string | null;
+}) {
   return (
     <div className="fixed inset-0 z-[190] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onCancel} />
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={loading ? undefined : onCancel}
+      />
       <div className="relative bg-white rounded-2xl w-full max-w-[360px] p-5 shadow-2xl">
         <div className="flex justify-center mb-3">
           <div className="w-11 h-11 rounded-full bg-red-50 flex items-center justify-center">
             <Trash2 className="w-5 h-5 text-red-500" />
           </div>
         </div>
-        <p className="text-sm text-gray-800 text-center mb-5 leading-relaxed px-2">
+        <p className="text-sm text-gray-800 text-center mb-3 leading-relaxed px-2">
           Та энэ захиалгыг устгахдаа итгэлтэй байна уу?
         </p>
+        {error && (
+          <p className="text-xs text-red-500 text-center mb-3 leading-relaxed px-2">{error}</p>
+        )}
         <div className="flex gap-2.5">
           <button
             onClick={onCancel}
+            disabled={loading}
             className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm
-                       text-gray-600 hover:bg-gray-50 active:bg-gray-100 transition-colors"
+                       text-gray-600 hover:bg-gray-50 active:bg-gray-100 transition-colors
+                       disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Цуцлах
           </button>
           <button
             onClick={onConfirm}
+            disabled={loading}
             className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm
-                       font-medium hover:bg-red-600 active:bg-red-700 transition-colors"
+                       font-medium hover:bg-red-600 active:bg-red-700 transition-colors
+                       disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Устгах
+            {loading ? 'Устгаж байна…' : 'Устгах'}
           </button>
         </div>
       </div>
@@ -457,7 +421,12 @@ function OrderCard({ order, isExpanded, onToggle, onNoteClick, onDeleteClick, on
                     className={i > 0 ? 'border-t border-gray-100' : ''}
                   >
                     <td className="text-sm text-gray-800 py-2 pr-3 leading-snug">
-                      {p.name}
+                      <div>{p.name}</div>
+                      {p.extraInfo && (
+                        <div className="text-[10px] text-blue-500 font-medium mt-0.5 leading-relaxed">
+                          {p.extraInfo}
+                        </div>
+                      )}
                     </td>
                     <td className="text-sm text-center text-gray-600 tabular-nums py-2">
                       {p.quantity}
@@ -493,17 +462,30 @@ function OrderCard({ order, isExpanded, onToggle, onNoteClick, onDeleteClick, on
 
 // ── Page component ────────────────────────────────────────────────────────────
 interface MyOrdersPageProps {
-  isOpen:  boolean;
-  onClose: () => void;
+  isOpen:           boolean;
+  onClose:          () => void;
+  isLoggedIn:       boolean;
+  customerPhone:    number | null;
+  customerGoogleId: string | null;
 }
 
-export function MyOrdersPage({ isOpen, onClose }: MyOrdersPageProps) {
+export function MyOrdersPage({
+  isOpen,
+  onClose,
+  isLoggedIn,
+  customerPhone,
+  customerGoogleId,
+}: MyOrdersPageProps) {
   const [mounted,     setMounted]     = useState(false);
   const [visible,     setVisible]     = useState(false);
-  const [orders,      setOrders]      = useState<Order[]>(INITIAL_ORDERS);
+  const [orders,      setOrders]      = useState<Order[]>([]);
+  const [loading,     setLoading]     = useState(false);
+  const [loadError,   setLoadError]   = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [noteModal,   setNoteModal]   = useState({ open: false, note: '' });
   const [deleteModal, setDeleteModal] = useState({ open: false, id: '' });
+  const [deleting,     setDeleting]   = useState(false);
+  const [deleteError,  setDeleteError] = useState<string | null>(null);
   const [rowPrintData, setRowPrintData] = useState<OrderPrintData | null>(null);
 
   // ── Slide-in / slide-out animation ───────────────────────────────────────
@@ -534,6 +516,44 @@ export function MyOrdersPage({ isOpen, onClose }: MyOrdersPageProps) {
     };
   }, [isOpen]);
 
+  // ── Online orders татах ────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isOpen) return;
+    if (!isLoggedIn) {
+      setOrders([]);
+      setLoading(false);
+      setLoadError(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setExpandedIds(new Set());
+    (async () => {
+      try {
+        const list = await fetchOnlineOrdersForCustomer({
+          isLoggedIn: true,
+          phone: customerPhone,
+          googleId: customerGoogleId,
+        });
+        if (!cancelled) {
+          setOrders(list);
+          setLoadError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setOrders([]);
+          setLoadError(err instanceof Error ? err.message : 'Захиалгуудыг татаж чадсангүй.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isLoggedIn, customerPhone, customerGoogleId]);
+
   function toggleExpand(id: string) {
     setExpandedIds(prev => {
       const next = new Set(prev);
@@ -542,10 +562,24 @@ export function MyOrdersPage({ isOpen, onClose }: MyOrdersPageProps) {
     });
   }
 
-  function handleConfirmDelete() {
-    setOrders(prev => prev.filter(o => o.id !== deleteModal.id));
-    setExpandedIds(prev => { const n = new Set(prev); n.delete(deleteModal.id); return n; });
-    setDeleteModal({ open: false, id: '' });
+  async function handleConfirmDelete() {
+    const target = orders.find(o => o.id === deleteModal.id);
+    if (!target) {
+      setDeleteModal({ open: false, id: '' });
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteOnlineOrdersByIds(target.rowIds);
+      setOrders(prev => prev.filter(o => o.id !== target.id));
+      setExpandedIds(prev => { const n = new Set(prev); n.delete(target.id); return n; });
+      setDeleteModal({ open: false, id: '' });
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Захиалгыг устгаж чадсангүй.');
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function handlePrintOrder(order: Order) {
@@ -600,7 +634,19 @@ export function MyOrdersPage({ isOpen, onClose }: MyOrdersPageProps) {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-4 py-5">
 
-          {orders.length === 0 ? (
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-24 text-gray-400">
+              <Package className="w-12 h-12 mb-3 opacity-25" />
+              <p className="text-sm">Захиалгуудыг ачааллаж байна…</p>
+            </div>
+          ) : loadError ? (
+            <div className="flex flex-col items-center justify-center py-24 text-gray-400">
+              <Package className="w-12 h-12 mb-3 opacity-25" />
+              <p className="text-sm text-red-500 text-center max-w-[280px] leading-relaxed">
+                {loadError}
+              </p>
+            </div>
+          ) : orders.length === 0 ? (
             /* Empty state */
             <div className="flex flex-col items-center justify-center py-24 text-gray-400">
               <Package className="w-12 h-12 mb-3 opacity-25" />
@@ -615,7 +661,10 @@ export function MyOrdersPage({ isOpen, onClose }: MyOrdersPageProps) {
                   isExpanded={expandedIds.has(order.id)}
                   onToggle={() => toggleExpand(order.id)}
                   onNoteClick={() => setNoteModal({ open: true, note: order.note! })}
-                  onDeleteClick={() => setDeleteModal({ open: true, id: order.id })}
+                  onDeleteClick={() => {
+                    setDeleteError(null);
+                    setDeleteModal({ open: true, id: order.id });
+                  }}
                   onPrint={() => handlePrintOrder(order)}
                 />
               ))}
@@ -635,8 +684,14 @@ export function MyOrdersPage({ isOpen, onClose }: MyOrdersPageProps) {
       {/* ── Delete confirm popup ─────────────────────────────────────────── */}
       {deleteModal.open && (
         <DeleteModal
-          onCancel={() => setDeleteModal({ open: false, id: '' })}
+          onCancel={() => {
+            if (deleting) return;
+            setDeleteError(null);
+            setDeleteModal({ open: false, id: '' });
+          }}
           onConfirm={handleConfirmDelete}
+          loading={deleting}
+          error={deleteError}
         />
       )}
 

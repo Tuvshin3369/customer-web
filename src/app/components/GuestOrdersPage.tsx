@@ -8,10 +8,15 @@ import {
   Package, Search, ArrowRight,
 } from 'lucide-react';
 import { OrderPrint, type OrderPrintData } from './print/OrderPrint';
+import {
+  fetchOnlineOrdersByEcommercePhone,
+  deleteOnlineOrdersByIds,
+  type DeliveryType,
+  type OnlineOrderProduct,
+} from '../lib/onlineOrdersFetch';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface OrderProduct { name: string; quantity: number; price: number; }
-type DeliveryType = 'pickup' | 'taxi' | 'delivery';
+type OrderProduct = OnlineOrderProduct;
 interface Order {
   id:           string;
   date:         string;
@@ -20,70 +25,8 @@ interface Order {
   deliveryType: DeliveryType;
   note?:        string;
   products:     OrderProduct[];
+  rowIds:       string[];
 }
-
-// ── Mock data (shared pool — same as MyOrdersPage) ────────────────────────────
-const ALL_ORDERS: Order[] = [
-  {
-    id: 'ORD-2025-001',
-    date: '2025.02.25 14:30',
-    store: 'Store A',
-    phone: '99990001',
-    deliveryType: 'delivery',
-    note: 'Үүдэнд нь тавиад явуулна уу. Утсаар урьдчилан мэдэгдээрэй. 13 давхар, 45 тоот.',
-    products: [
-      { name: 'Nike Air Max 270 Спорт', quantity: 2, price: 289000 },
-      { name: 'Adidas Ultraboost 22 Pro', quantity: 1, price: 320000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-002',
-    date: '2025.02.24 10:15',
-    store: 'Store A',
-    phone: '88881234',
-    deliveryType: 'taxi',
-    products: [
-      { name: 'Rolex Submariner', quantity: 1, price: 12500000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-003',
-    date: '2025.02.22 16:45',
-    store: 'Store B',
-    phone: '99990003',
-    deliveryType: 'pickup',
-    note: 'Маргааш 11:00 цагт очно.',
-    products: [
-      { name: 'Sony WH-1000XM5 Чихэвч', quantity: 1, price: 450000 },
-      { name: 'JBL Flip 6 Чанга яригч', quantity: 2, price: 180000 },
-      { name: 'Premium Cotton T-Shirt', quantity: 3, price: 45000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-004',
-    date: '2025.02.20 09:00',
-    store: 'Store B',
-    phone: '77774321',
-    deliveryType: 'delivery',
-    products: [
-      { name: 'MacBook Pro 14" M3 Pro', quantity: 1, price: 4200000 },
-      { name: 'iPhone 15 Pro Max 256GB', quantity: 1, price: 2850000 },
-    ],
-  },
-  {
-    id: 'ORD-2025-005',
-    date: '2025.02.18 13:20',
-    store: 'Store A',
-    phone: '96661111',
-    deliveryType: 'taxi',
-    note: 'Urgently needed.',
-    products: [
-      { name: 'Cartier Love Алтан бөгж',       quantity: 1, price: 3500000 },
-      { name: 'Tiffany & Co Хэлхээ',           quantity: 1, price: 2800000 },
-      { name: 'Chanel No. 5 Eau de Parfum',    quantity: 2, price:  480000 },
-    ],
-  },
-];
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function fmt(n: number): string { return n.toLocaleString('en-US') + '₮'; }
@@ -174,27 +117,49 @@ function NoteModal({ note, onClose }: { note: string; onClose: () => void }) {
 }
 
 // ── Delete Confirm Modal ──────────────────────────────────────────────────────
-function DeleteModal({ onCancel, onConfirm }: { onCancel: () => void; onConfirm: () => void }) {
+function DeleteModal({
+  onCancel,
+  onConfirm,
+  loading = false,
+  error = null,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+  loading?: boolean;
+  error?: string | null;
+}) {
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onCancel} />
+      <div
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        onClick={loading ? undefined : onCancel}
+      />
       <div className="relative bg-white rounded-2xl w-full max-w-[360px] p-5 shadow-2xl">
         <div className="flex justify-center mb-3">
           <div className="w-11 h-11 rounded-full bg-red-50 flex items-center justify-center">
             <Trash2 className="w-5 h-5 text-red-500" />
           </div>
         </div>
-        <p className="text-sm text-gray-800 text-center mb-5 leading-relaxed px-2">
+        <p className="text-sm text-gray-800 text-center mb-3 leading-relaxed px-2">
           Та энэ захиалгыг устгахдаа итгэлтэй байна уу?
         </p>
+        {error && (
+          <p className="text-xs text-red-500 text-center mb-3 leading-relaxed px-2">{error}</p>
+        )}
         <div className="flex gap-2.5">
-          <button onClick={onCancel}
-                  className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 active:bg-gray-100 transition-colors">
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 active:bg-gray-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             Цуцлах
           </button>
-          <button onClick={onConfirm}
-                  className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-medium hover:bg-red-600 active:bg-red-700 transition-colors">
-            Устгах
+          <button
+            onClick={onConfirm}
+            disabled={loading}
+            className="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-medium hover:bg-red-600 active:bg-red-700 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {loading ? 'Устгаж байна…' : 'Устгах'}
           </button>
         </div>
       </div>
@@ -304,7 +269,14 @@ function OrderCard({ order, isExpanded, onToggle, onNoteClick, onDeleteClick, on
               <tbody>
                 {order.products.map((p, i) => (
                   <tr key={i} className={i > 0 ? 'border-t border-gray-100' : ''}>
-                    <td className="text-sm text-gray-800 py-2 pr-3 leading-snug">{p.name}</td>
+                    <td className="text-sm text-gray-800 py-2 pr-3 leading-snug">
+                      <div>{p.name}</div>
+                      {p.extraInfo && (
+                        <div className="text-[10px] text-blue-500 font-medium mt-0.5 leading-relaxed">
+                          {p.extraInfo}
+                        </div>
+                      )}
+                    </td>
                     <td className="text-sm text-center text-gray-600 tabular-nums py-2">{p.quantity}</td>
                     <td className="text-sm text-right text-gray-600 tabular-nums py-2 pr-3">{fmt(p.price)}</td>
                     <td className="text-sm text-right text-gray-700 tabular-nums py-2">{fmt(p.price * p.quantity)}</td>
@@ -341,9 +313,13 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
 
   // ── Orders state ──────────────────────────────────────────────────────────
   const [orders,      setOrders]      = useState<Order[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchErr,     setSearchErr]     = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [noteModal,   setNoteModal]   = useState({ open: false, note: '' });
   const [deleteModal, setDeleteModal] = useState({ open: false, id: '' });
+  const [deleting,     setDeleting]   = useState(false);
+  const [deleteError,  setDeleteError] = useState<string | null>(null);
   const [rowPrintData, setRowPrintData] = useState<OrderPrintData | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -356,6 +332,7 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
       setStep('phone');
       setPhone('');
       setPhoneErr('');
+      setSearchErr(null);
       setOrders([]);
       setExpandedIds(new Set());
       requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -386,20 +363,29 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
   }, [isOpen]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
-  function handleSearch() {
+  async function handleSearch() {
     const cleaned = phone.replace(/\s/g, '');
     if (cleaned.length < 8) {
       setPhoneErr('8 оронтой утасны дугаар оруулна уу.');
       return;
     }
     setPhoneErr('');
-    const found = ALL_ORDERS.filter(o => o.phone === cleaned);
-    setOrders(found);
-    setStep('orders');
+    setSearchErr(null);
+    setSearchLoading(true);
+    try {
+      const list = await fetchOnlineOrdersByEcommercePhone(cleaned);
+      setOrders(list);
+      setStep('orders');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Захиалгуудыг татаж чадсангүй.';
+      setSearchErr(msg);
+    } finally {
+      setSearchLoading(false);
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter') handleSearch();
+    if (e.key === 'Enter') void handleSearch();
   }
 
   function toggleExpand(id: string) {
@@ -410,14 +396,34 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
     });
   }
 
-  function handleConfirmDelete() {
-    setOrders(prev => prev.filter(o => o.id !== deleteModal.id));
-    setExpandedIds(prev => { const n = new Set(prev); n.delete(deleteModal.id); return n; });
-    setDeleteModal({ open: false, id: '' });
+  async function handleConfirmDelete() {
+    const target = orders.find(o => o.id === deleteModal.id);
+    if (!target) {
+      setDeleteModal({ open: false, id: '' });
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteOnlineOrdersByIds(target.rowIds);
+      setOrders(prev => prev.filter(o => o.id !== target.id));
+      setExpandedIds(prev => { const n = new Set(prev); n.delete(target.id); return n; });
+      setDeleteModal({ open: false, id: '' });
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Захиалгыг устгаж чадсангүй.');
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function handlePrintOrder(order: Order) {
-    setRowPrintData({ id: order.id, date: order.date, store: order.store, phone: order.phone, products: order.products });
+    setRowPrintData({
+      id: order.id,
+      date: order.date,
+      store: order.store,
+      phone: order.phone,
+      products: order.products,
+    });
   }
 
   if (!mounted) return null;
@@ -435,7 +441,15 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
       <div className="sticky top-0 z-10 bg-white border-b border-gray-200 shrink-0">
         <div className="max-w-4xl mx-auto px-4 py-3.5 flex items-center gap-3">
           <button
-            onClick={step === 'orders' ? () => setStep('phone') : onClose}
+            onClick={
+              step === 'orders'
+                ? () => {
+                    setStep('phone');
+                    setOrders([]);
+                    setExpandedIds(new Set());
+                  }
+                : onClose
+            }
             aria-label="Буцах"
             className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center hover:bg-gray-200 transition-colors shrink-0"
           >
@@ -443,7 +457,7 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
           </button>
 
           <h1 className="text-[22px] font-semibold text-gray-900 leading-none flex-1">
-            {step === 'phone' ? 'Захиалга хайх' : 'Захиалгууд'}
+            {step === 'phone' ? 'Захиалга хайх' : 'Миний захиалгууд'}
           </h1>
 
           {step === 'orders' && orders.length > 0 && (
@@ -493,6 +507,7 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
                       onChange={e => {
                         setPhone(e.target.value.replace(/[^0-9]/g, ''));
                         if (phoneErr) setPhoneErr('');
+                        if (searchErr) setSearchErr(null);
                       }}
                       onKeyDown={handleKeyDown}
                       className="flex-1 bg-transparent text-sm text-gray-800 placeholder-gray-400 outline-none tracking-widest"
@@ -505,14 +520,17 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
                     )}
                   </div>
                   {phoneErr && <p className="text-xs text-red-500 mt-1 pl-0.5">{phoneErr}</p>}
+                  {searchErr && <p className="text-xs text-red-500 mt-2 pl-0.5 leading-relaxed">{searchErr}</p>}
                 </div>
 
                 <button
-                  onClick={handleSearch}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold transition-colors"
+                  type="button"
+                  onClick={() => void handleSearch()}
+                  disabled={searchLoading}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white text-sm font-semibold transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <Search className="w-4 h-4" />
-                  Хайх
+                  {searchLoading ? 'Хайж байна…' : 'Хайх'}
                   <ArrowRight className="w-4 h-4 ml-0.5" />
                 </button>
               </div>
@@ -527,7 +545,12 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
                 <Phone className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                 <span className="text-xs text-gray-500 font-mono tracking-widest">{phone}</span>
                 <button
-                  onClick={() => setStep('phone')}
+                  type="button"
+                  onClick={() => {
+                    setStep('phone');
+                    setOrders([]);
+                    setExpandedIds(new Set());
+                  }}
                   className="ml-auto text-xs text-blue-500 hover:text-blue-700 transition-colors font-medium"
                 >
                   Өөрчлөх
@@ -552,7 +575,10 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
                       isExpanded={expandedIds.has(order.id)}
                       onToggle={() => toggleExpand(order.id)}
                       onNoteClick={() => setNoteModal({ open: true, note: order.note! })}
-                      onDeleteClick={() => setDeleteModal({ open: true, id: order.id })}
+                      onDeleteClick={() => {
+                        setDeleteError(null);
+                        setDeleteModal({ open: true, id: order.id });
+                      }}
                       onPrint={() => handlePrintOrder(order)}
                     />
                   ))}
@@ -569,8 +595,14 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
       )}
       {deleteModal.open && (
         <DeleteModal
-          onCancel={() => setDeleteModal({ open: false, id: '' })}
+          onCancel={() => {
+            if (deleting) return;
+            setDeleteError(null);
+            setDeleteModal({ open: false, id: '' });
+          }}
           onConfirm={handleConfirmDelete}
+          loading={deleting}
+          error={deleteError}
         />
       )}
       {rowPrintData && (
