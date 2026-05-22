@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, MapPin, Navigation, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
-import { loadGoogleMapsScript, MAP_DEFAULT_CENTER, GOOGLE_MAPS_API_KEY } from '../utils/loadGoogleMaps';
+import {
+  isGoogleMapsApiKeyConfigured,
+  loadGoogleMapsScript,
+  MAP_DEFAULT_CENTER,
+} from '../utils/loadGoogleMaps';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export interface PickedLocation {
@@ -103,7 +107,7 @@ export function MapPickerModal({
     async function initMap() {
       try {
         // Show no API key hint without actually loading
-        if (GOOGLE_MAPS_API_KEY === 'YOUR_GOOGLE_MAPS_API_KEY') {
+        if (!isGoogleMapsApiKeyConfigured()) {
           throw new Error('API_KEY_MISSING');
         }
 
@@ -139,14 +143,18 @@ export function MapPickerModal({
         const map = new G.Map(mapDivRef.current, {
           center,
           zoom:               15,
+          mapTypeId:          'hybrid',
           disableDefaultUI:   true,
           zoomControl:        true,
           zoomControlOptions: { position: G.ControlPosition.RIGHT_CENTER },
+          mapTypeControl:     true,
+          mapTypeControlOptions: {
+            style: G.MapTypeControlStyle.HORIZONTAL_BAR,
+            position: G.ControlPosition.TOP_LEFT,
+            mapTypeIds: ['roadmap', 'satellite', 'hybrid'],
+          },
           gestureHandling:    'greedy',
           clickableIcons:     false,
-          styles: [
-            { featureType: 'poi', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-          ],
         });
 
         const marker = new G.Marker({
@@ -193,7 +201,9 @@ export function MapPickerModal({
       } catch (err: any) {
         if (cancelled) return;
         if (err?.message === 'API_KEY_MISSING') {
-          setLoadError('Google Maps API key тохируулаагүй байна.\n/src/app/utils/loadGoogleMaps.ts файлд GOOGLE_MAPS_API_KEY-г өөрчилнө үү.');
+          setLoadError(
+            'Google Maps API key тохируулаагүй байна.\nТөслийн .env файлд VITE_GOOGLE_MAPS_API_KEY=... гэж оруулна уу.',
+          );
         } else {
           setLoadError(err?.message || 'Газрын зураг ачааллаж чадсангүй.');
         }
@@ -237,7 +247,7 @@ export function MapPickerModal({
 
   if (!mounted) return null;
 
-  const isApiKeyMissing = GOOGLE_MAPS_API_KEY === 'YOUR_GOOGLE_MAPS_API_KEY';
+  const isApiKeyMissing = !isGoogleMapsApiKeyConfigured();
 
   return (
     <div
@@ -319,11 +329,11 @@ export function MapPickerModal({
                 <>
                   <p className="text-sm font-semibold text-gray-700">API Key тохируулаагүй</p>
                   <p className="text-xs text-gray-500 leading-relaxed">
-                    Google Maps ашиглахын тулд{' '}
-                    <span className="font-mono bg-gray-100 px-1 rounded text-[10px]">
-                      /src/app/utils/loadGoogleMaps.ts
-                    </span>{' '}
-                    дотор <strong>GOOGLE_MAPS_API_KEY</strong>-г бодит key-ээр солино уу.
+                    Google Maps ашиглахын тулд төслийн үндсэн{' '}
+                    <span className="font-mono bg-gray-100 px-1 rounded text-[10px]">.env</span>{' '}
+                    файлд{' '}
+                    <strong>VITE_GOOGLE_MAPS_API_KEY</strong> тохируулна уу. Дараа нь dev server-ийг
+                    дахин асаана (<span className="font-mono text-[10px]">npm run dev</span>).
                   </p>
                   <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-3 text-left w-full">
                     <p className="text-[11px] text-blue-700 font-semibold mb-1">Шаардлагатай APIууд:</p>
