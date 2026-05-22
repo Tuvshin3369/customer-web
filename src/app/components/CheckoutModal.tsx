@@ -15,6 +15,7 @@ import { MapPickerModal, PickedLocation } from './MapPickerModal';
 import { calculateDistanceKm } from '../utils/haversine';
 import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { PaymentInfoCard } from './PaymentInfoCard';
+import { buildCreditTransferNote } from '../lib/creditTransferNote';
 import {
   fetchCustomerProfileByPhone,
   fetchCustomerProfileByGoogleId,
@@ -1179,7 +1180,10 @@ export function CheckoutModal({
                   bankName={paymentBankDetails.bankName}
                   accountHolder={paymentBankDetails.accountHolder}
                   accountNumber={paymentBankDetails.accountNumber}
-                  transferNote={phone || undefined}
+                  transferNote={buildCreditTransferNote(
+                    new Date().toISOString(),
+                    phone || undefined,
+                  )}
                   showTransferWarning={!phone}
                 />
 

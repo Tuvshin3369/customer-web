@@ -10,7 +10,7 @@ import {
 import { PurchaseHistoryPrint }            from './print/PurchaseHistoryPrint';
 import { buildGroupedPurchaseData }        from '../../lib/print/buildPurchaseData';
 import type { GroupedPrintData }           from '../../lib/print/buildPurchaseData';
-import { PaymentInfoCard }                 from './PaymentInfoCard';
+import { PaymentInfoCard } from './PaymentInfoCard';
 import {
   fetchSalesPurchaseHistoryGrouped,
   type PurchaseHistoryGroupedSale,
@@ -30,7 +30,8 @@ interface HistoryItem {
   creditType:   CreditType;
   creditAmount?: number;  // only for 'partial'
   products:     HistoryProduct[];
-  bankInfo?:    PurchaseSaleBankInfo;
+  bankInfo?:      PurchaseSaleBankInfo;
+  transferNote?:  string;
 }
 
 
@@ -75,6 +76,7 @@ function groupedSaleToHistoryItem(row: PurchaseHistoryGroupedSale): HistoryItem 
     creditAmount: row.creditAmount,
     products: row.products,
     bankInfo: row.bankInfo,
+    transferNote: row.transferNote,
   };
 }
 
@@ -427,7 +429,7 @@ function HistoryCard({
               bankName={item.bankInfo?.bankName ?? '—'}
               accountHolder={item.bankInfo?.accountHolder ?? '—'}
               accountNumber={item.bankInfo?.accountNumber ?? '—'}
-              transferNote={item.phone || undefined}
+              transferNote={item.transferNote}
             />
 
             {/* 3. Захиалгын дүн */}

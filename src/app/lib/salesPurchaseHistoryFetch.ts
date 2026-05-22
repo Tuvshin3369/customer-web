@@ -10,6 +10,7 @@
  * RLS: `sales` дээр anon SELECT харилцагчийн `customer_id`-аар шүүх policy шаардлагатай.
  */
 
+import { buildCreditTransferNote } from './creditTransferNote';
 import {
   fetchCustomerProfileByGoogleId,
   fetchCustomerProfileByPhone,
@@ -43,6 +44,10 @@ export interface PurchaseHistoryGroupedSale {
   products: PurchaseHistorySaleProduct[];
   /** Зээл товч дарахад PaymentInfoCard-д */
   bankInfo?: PurchaseSaleBankInfo;
+  /** Гүйлгээний утга — «Зээл төлөв -» + created_at + утас */
+  transferNote?: string;
+  /** Борлуулалтын created_at (ISO) */
+  createdAtIso: string;
 }
 
 interface SupabaseEnv {
@@ -593,6 +598,28 @@ function resolveStoreIdForRow(
   return '';
 }
 
+/** `customers.phone` — гүйлгээний утгад эхний сонголт */
+async function fetchCustomerPhoneById(
+  env: SupabaseEnv,
+  customerId: string,
+): Promise<string> {
+  if (!customerId.trim()) return '';
+  const headers = restGetHeaders(env.anonKey);
+  const q = new URLSearchParams({
+    select: 'phone',
+    id: `eq.${customerId}`,
+    limit: '1',
+  });
+  try {
+    const res = await fetch(`${env.restBase}/rest/v1/customers?${q.toString()}`, { headers });
+    const json = await parseJsonSafely(res);
+    if (!res.ok || !Array.isArray(json) || json.length === 0) return '';
+    return stringifyPhone((json[0] as Record<string, unknown>).phone);
+  } catch {
+    return '';
+  }
+}
+
 /** Зочин эсвэл register хоосон → хувийн данс, бусад → байгууллагын данс */
 async function fetchCustomerHasCompanyRegister(params: {
   isLoggedIn: boolean;
@@ -719,6 +746,12 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
     googleId: params.googleId,
   });
 
+  const customerPhoneFromDb = await fetchCustomerPhoneById(env, customerId);
+  const customerPhoneFallback =
+    params.phone != null && params.phone > 0
+      ? stringifyPhone(params.phone)
+      : customerPhoneFromDb;
+
   const fromKey = (params.dateFrom.split('T')[0] ?? params.dateFrom).trim();
   const toKey = (params.dateTo.split('T')[0] ?? params.dateTo).trim();
   const fromBounds = utcDayBoundsIso(fromKey);
@@ -827,7 +860,22 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
           ? head.sold_date
           : new Date().toISOString();
 
-    const phone = stringifyPhone(head.ecommerce_phone);
+    /** Гүйлгээний утга / мөр — эхлээд customers.phone, байхгүй бол sales.ecommerce_phone */
+    let phone = customerPhoneFallback;
+    if (!phone) {
+      phone = stringifyPhone(head.ecommerce_phone);
+      if (!phone) {
+        for (const r of arr) {
+          const p = stringifyPhone(r.ecommerce_phone);
+          if (p) {
+            phone = p;
+            break;
+          }
+        }
+      }
+    }
+
+    const transferNote = buildCreditTransferNote(created, phone);
     const store = resolveStoreNameForRow(
       head,
       branchStoreById,
@@ -915,6 +963,8 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
       note: noteJoined || undefined,
       products,
       bankInfo,
+      transferNote,
+      createdAtIso: created,
     });
   }
 

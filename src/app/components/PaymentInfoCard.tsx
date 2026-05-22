@@ -10,24 +10,6 @@ interface PaymentInfoCardProps {
   showTransferWarning?: boolean;  // amber alert "утас оруулаагүй" banner
 }
 
-// ─── Internal row helper ──────────────────────────────────────────────────────
-function BankRow({
-  label,
-  value,
-  valueClass = 'text-gray-700 font-medium text-xs',
-}: {
-  label:       string;
-  value:       string;
-  valueClass?: string;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <p className="text-xs text-gray-500 shrink-0">{label}</p>
-      <p className={`${valueClass} text-right break-all`}>{value}</p>
-    </div>
-  );
-}
-
 // ─── Main component ───────────────────────────────────────────────────────────
 export function PaymentInfoCard({
   bankName,
@@ -36,14 +18,14 @@ export function PaymentInfoCard({
   transferNote,
   showTransferWarning = false,
 }: PaymentInfoCardProps) {
-  const [copied, setCopied] = useState(false);
+  const [copiedField, setCopiedField] = useState<'account' | 'transfer' | null>(null);
 
-  function handleCopy() {
-    navigator.clipboard.writeText(accountNumber).catch(() => {
-      // Fallback for environments without clipboard API
+  function copyText(text: string, field: 'account' | 'transfer') {
+    if (!text.trim()) return;
+    navigator.clipboard.writeText(text).catch(() => {
       try {
         const el = document.createElement('textarea');
-        el.value = accountNumber;
+        el.value = text;
         el.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
         document.body.appendChild(el);
         el.focus();
@@ -52,8 +34,8 @@ export function PaymentInfoCard({
         document.body.removeChild(el);
       } catch { /* silent */ }
     });
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setCopiedField(field);
+    setTimeout(() => setCopiedField(null), 1500);
   }
 
   return (
@@ -84,14 +66,14 @@ export function PaymentInfoCard({
             <span className="text-xs text-gray-700 font-medium text-right break-all">{accountNumber}</span>
             <button
               type="button"
-              onClick={handleCopy}
+              onClick={() => copyText(accountNumber, 'account')}
               title="Дансны дугаар хуулах"
               aria-label="Дансны дугаар хуулах"
               className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg
                          bg-transparent hover:bg-gray-200 active:bg-gray-300
                          text-gray-400 hover:text-gray-700 transition-colors"
             >
-              {copied
+              {copiedField === 'account'
                 ? <Check className="w-3.5 h-3.5 text-green-500" />
                 : <Copy  className="w-3.5 h-3.5" />
               }
@@ -99,17 +81,38 @@ export function PaymentInfoCard({
           </div>
         </div>
 
-        {/* Transfer note (гүйлгээний утга) */}
-        <div className="border-t border-gray-200 pt-2.5 space-y-2.5">
-          <BankRow
-            label="Гүйлгээний утга"
-            value={transferNote || '—'}
-            valueClass={
-              transferNote
-                ? 'text-gray-900 font-semibold text-xs'
-                : 'text-gray-400 italic text-xs'
-            }
-          />
+        {/* Гүйлгээний утга + хуулах */}
+        <div className="border-t border-gray-200 pt-2.5">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-xs text-gray-500 shrink-0">Гүйлгээний утга</p>
+            <div className="flex items-center justify-end gap-0.5 min-w-0 flex-1">
+              <span
+                className={
+                  transferNote
+                    ? 'text-xs text-gray-900 font-semibold text-right break-all'
+                    : 'text-xs text-gray-400 italic text-right break-all'
+                }
+              >
+                {transferNote || '—'}
+              </span>
+              {transferNote ? (
+                <button
+                  type="button"
+                  onClick={() => copyText(transferNote, 'transfer')}
+                  title="Гүйлгээний утга хуулах"
+                  aria-label="Гүйлгээний утга хуулах"
+                  className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg
+                             bg-transparent hover:bg-gray-200 active:bg-gray-300
+                             text-gray-400 hover:text-gray-700 transition-colors"
+                >
+                  {copiedField === 'transfer'
+                    ? <Check className="w-3.5 h-3.5 text-green-500" />
+                    : <Copy  className="w-3.5 h-3.5" />
+                  }
+                </button>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
 
