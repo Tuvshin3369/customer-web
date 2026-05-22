@@ -349,8 +349,9 @@ export default function App() {
     }
     try {
       const query = new URLSearchParams({
-        select: 'id,name,facebook_messenger_url',
-        order: 'name.asc',
+        select: 'id,name,facebook_messenger_url,is_active,show',
+        is_active: 'eq.1',
+        order: 'show.asc.nullslast',
       });
       const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/stores?${query.toString()}`, {
         headers: {
@@ -372,14 +373,40 @@ export default function App() {
         .map((row: Record<string, unknown>) => {
           const urlRaw = row.facebook_messenger_url;
           const urlStr = typeof urlRaw === 'string' && urlRaw.trim() ? urlRaw.trim() : null;
+          const showRaw = row.show;
+          const showNum =
+            showRaw == null || showRaw === ''
+              ? null
+              : Number(showRaw);
+          const show =
+            showNum != null && Number.isFinite(showNum) ? showNum : null;
           return {
             id: row.id != null ? String(row.id) : '',
             name: typeof row.name === 'string' ? row.name.trim() : '',
             facebook_messenger_url: urlStr,
+            is_active: row.is_active,
+            show,
           };
         })
-        .filter((r) => r.id.length > 0 && r.name.length > 0)
-        .sort((a, b) => a.name.localeCompare(b.name, 'mn'));
+        .filter((r) => {
+          if (r.id.length === 0 || r.name.length === 0) return false;
+          const a = r.is_active;
+          return a === true || a === 1 || a === '1';
+        })
+        .sort((a, b) => {
+          const aNull = a.show == null;
+          const bNull = b.show == null;
+          if (aNull && bNull) return a.name.localeCompare(b.name, 'mn');
+          if (aNull) return 1;
+          if (bNull) return -1;
+          if (a.show !== b.show) return a.show! - b.show!;
+          return a.name.localeCompare(b.name, 'mn');
+        })
+        .map(({ id, name, facebook_messenger_url }) => ({
+          id,
+          name,
+          facebook_messenger_url,
+        }));
       setStores(mapped);
 
       let savedId: string | null = null;
@@ -1059,7 +1086,7 @@ export default function App() {
   }, [currentProducts, searchQuery]);
 
   const storePickerItems = useMemo(
-    () => [...stores].sort((a, b) => a.name.localeCompare(b.name, 'mn')).map(({ id, name }) => ({ id, name })),
+    () => stores.map(({ id, name }) => ({ id, name })),
     [stores],
   );
 
