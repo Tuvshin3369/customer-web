@@ -121,13 +121,22 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
     setGoogleLoading(true);
     setErrors({});
     try {
+      const phoneTrim = phone.trim();
+      if (phoneTrim && !/^\+?[\d\s\-]{8,15}$/.test(phoneTrim)) {
+        setErrors({ phone: 'Зөв утасны дугаар оруулна уу.' });
+        return;
+      }
       const clientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim();
       if (!clientId) {
         throw new Error('Google OAuth тохируулаагүй байна. (VITE_GOOGLE_CLIENT_ID)');
       }
       await loadGoogleIdentityScript();
       const sub = await requestGoogleUserSub(clientId);
-      await registerCustomerWithGoogleId(sub);
+      await registerCustomerWithGoogleId(sub, {
+        phone: phoneTrim || undefined,
+        organizationName: orgName.trim() || undefined,
+        register: orgRegNumber.trim() || undefined,
+      });
       setRegisterSuccessKind('google');
     } catch (err: unknown) {
       setErrors({ general: err instanceof Error ? err.message : 'Алдаа гарлаа.' });
@@ -340,6 +349,11 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
               : <GoogleIcon />}
             Google-ээр бүртгүүлэх
           </button>
+          )}
+          {!registerSuccessKind && (
+            <p className="text-[11px] text-gray-400 text-center -mt-2 mb-1 leading-relaxed">
+              Google-ээр бүртгүүлэхэд утас, нууц үг заавал биш. Хүсвэл дээрх утсаа оруулж болно.
+            </p>
           )}
 
           {/* ════════════════════════════════════════════════════════════════

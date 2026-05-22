@@ -50,19 +50,56 @@ export function loadGoogleIdentityScript(): Promise<void> {
   });
 }
 
-async function fetchGoogleSub(accessToken: string): Promise<string> {
+export interface GoogleUserProfile {
+  sub: string;
+  name?: string;
+  given_name?: string;
+  family_name?: string;
+  email?: string;
+}
+
+async function fetchGoogleUserProfile(accessToken: string): Promise<GoogleUserProfile> {
   const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-  const json = (await res.json()) as { sub?: string };
+  const json = (await res.json()) as {
+    sub?: string;
+    name?: string;
+    given_name?: string;
+    family_name?: string;
+    email?: string;
+  };
   if (!res.ok || !json.sub) {
     throw new Error('Google хэрэглэгчийн мэдээлэл авахад алдаа гарлаа.');
   }
-  return json.sub;
+  return {
+    sub: json.sub,
+    name: json.name,
+    given_name: json.given_name,
+    family_name: json.family_name,
+    email: json.email,
+  };
 }
 
-/** Popup / token flow — дуусахад Google `sub` буцаана. */
-export function requestGoogleUserSub(clientId: string): Promise<string> {
+/** UI-д харуулах нэр — Google profile-оос */
+export function formatGoogleDisplayName(
+  info: Pick<GoogleUserProfile, 'name' | 'given_name' | 'family_name' | 'email'>,
+): string {
+  const full = info.name?.trim();
+  if (full) return full;
+  const given = info.given_name?.trim() ?? '';
+  const family = info.family_name?.trim() ?? '';
+  const combined = [given, family].filter(Boolean).join(' ').trim();
+  if (combined) return combined;
+  const email = info.email?.trim();
+  if (email) {
+    const local = email.split('@')[0]?.trim();
+    if (local) return local;
+  }
+  return 'Хэрэглэгч';
+}
+
+function requestGoogleAccessToken(clientId: string): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!window.google?.accounts?.oauth2) {
       reject(new Error('Google API бэлэн биш байна.'));
@@ -71,7 +108,7 @@ export function requestGoogleUserSub(clientId: string): Promise<string> {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope: 'openid email profile',
-      callback: async (tokenResponse) => {
+      callback: (tokenResponse) => {
         if (tokenResponse.error) {
           const d = tokenResponse.error_description || tokenResponse.error;
           reject(new Error(d === 'access_denied' ? 'Цуцлагдлаа.' : d));
@@ -81,14 +118,21 @@ export function requestGoogleUserSub(clientId: string): Promise<string> {
           reject(new Error('Токен олдсонгүй.'));
           return;
         }
-        try {
-          const sub = await fetchGoogleSub(tokenResponse.access_token);
-          resolve(sub);
-        } catch (e) {
-          reject(e instanceof Error ? e : new Error('Google алдаа.'));
-        }
+        resolve(tokenResponse.access_token);
       },
     });
     client.requestAccessToken({ prompt: '' });
   });
+}
+
+/** Popup / token flow — `sub` + нэр, имэйл */
+export async function requestGoogleUserProfile(clientId: string): Promise<GoogleUserProfile> {
+  const accessToken = await requestGoogleAccessToken(clientId);
+  return fetchGoogleUserProfile(accessToken);
+}
+
+/** Popup / token flow — дуусахад Google `sub` буцаана. */
+export async function requestGoogleUserSub(clientId: string): Promise<string> {
+  const profile = await requestGoogleUserProfile(clientId);
+  return profile.sub;
 }

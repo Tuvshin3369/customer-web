@@ -205,8 +205,18 @@ export async function registerCustomerWithPhone(params: {
   }
 }
 
-/** Google OAuth-оор авсан `sub` (google_id) */
-export async function registerCustomerWithGoogleId(googleId: string): Promise<void> {
+export type RegisterCustomerWithGoogleOptions = {
+  /** Заавал биш — оруулсан бол холбоно */
+  phone?: string;
+  organizationName?: string;
+  register?: string;
+};
+
+/** Google OAuth-оор авсан `sub` (google_id). Утас, нууц үг заавал биш. */
+export async function registerCustomerWithGoogleId(
+  googleId: string,
+  opts?: RegisterCustomerWithGoogleOptions,
+): Promise<void> {
   const { restBase, anonKey } = getSupabaseRest();
   if (!googleId.trim()) throw new Error('Google ID олдсонгүй.');
 
@@ -218,6 +228,27 @@ export async function registerCustomerWithGoogleId(googleId: string): Promise<vo
     google_id: googleId.trim(),
     is_individual: false,
   };
+
+  const phoneRaw = opts?.phone?.trim() ?? '';
+  if (phoneRaw) {
+    const phoneNum = phoneToInt64(phoneRaw);
+    if (Number.isNaN(phoneNum)) {
+      throw new Error('Утасны дугаар буруу байна.');
+    }
+    if (await customerExistsByPhone(restBase, anonKey, phoneNum)) {
+      throw new Error('Энэ утасны дугаар бүртгэлтэй байна.');
+    }
+    body.phone = phoneNum;
+  }
+
+  const orgName = opts?.organizationName?.trim() ?? '';
+  const reg = opts?.register?.trim() ?? '';
+  if (orgName) body.organization_name = orgName;
+  if (reg) body.register = reg;
+
+  /** DB-д password_hash NOT NULL үед — зөвхөн Google-ээр нэвтэрнэ, утасны нууц ашиглахгүй */
+  const { default: bcrypt } = await import('bcryptjs');
+  body.password_hash = await bcrypt.hash(`google-oauth:${googleId.trim()}`, 10);
 
   const res = await fetch(`${restBase}/rest/v1/customers`, {
     method: 'POST',
@@ -231,10 +262,17 @@ export async function registerCustomerWithGoogleId(googleId: string): Promise<vo
     if (res.status === 409 || /duplicate|unique/i.test(msg)) {
       throw new Error('Энэ Google данс аль хэдийн бүртгэлтэй байна.');
     }
-    throw new Error(
-      msg ||
-        'Google-ээр бүртгэхэд алдаа гарлаа. DB дээр phone / password_hash заавал эсэхийг шалгана уу.',
-    );
+    if (/null value in column "phone"/i.test(msg)) {
+      throw new Error(
+        'Утасны дугааргүй Google бүртгэлд Supabase SQL Editor дээр supabase/customers-google-signup.sql ажиллуулна уу.',
+      );
+    }
+    if (/null value in column "password_hash"/i.test(msg)) {
+      throw new Error(
+        'password_hash заавал байх тохиргоо үлдсэн байна. Дахин оролдоно уу; эсвэл customers-google-signup.sql ажиллуулна уу.',
+      );
+    }
+    throw new Error(msg || `Google-ээр бүртгэхэд алдаа гарлаа (${res.status}).`);
   }
 }
 

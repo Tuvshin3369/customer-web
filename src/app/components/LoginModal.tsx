@@ -5,7 +5,11 @@ import {
   verifyGoogleCustomerLogin,
   formatCustomerPhoneDisplay,
 } from '../lib/customersRegister';
-import { loadGoogleIdentityScript, requestGoogleUserSub } from '../lib/googleIdentity';
+import {
+  formatGoogleDisplayName,
+  loadGoogleIdentityScript,
+  requestGoogleUserProfile,
+} from '../lib/googleIdentity';
 
 interface LoginModalProps {
   isOpen: boolean;
@@ -121,9 +125,13 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
       const clientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined)?.trim();
       if (clientId) {
         await loadGoogleIdentityScript();
-        const googleId = await requestGoogleUserSub(clientId);
-        const { isWorker } = await verifyGoogleCustomerLogin(googleId);
-        onLoginSuccess?.({ phoneDisplay: 'Google', googleId, isWorker });
+        const profile = await requestGoogleUserProfile(clientId);
+        const { isWorker } = await verifyGoogleCustomerLogin(profile.sub);
+        onLoginSuccess?.({
+          phoneDisplay: formatGoogleDisplayName(profile),
+          googleId: profile.sub,
+          isWorker,
+        });
         onClose();
         return;
       }
@@ -140,7 +148,7 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
         return;
       }
       const { isWorker } = await verifyGoogleCustomerLogin(googleId);
-      onLoginSuccess?.({ phoneDisplay: 'Google', googleId, isWorker });
+      onLoginSuccess?.({ phoneDisplay: 'Хэрэглэгч', googleId, isWorker });
       onClose();
     } catch (err: unknown) {
       setErrors({ general: err instanceof Error ? err.message : 'Google нэвтрэхэд алдаа гарлаа.' });
