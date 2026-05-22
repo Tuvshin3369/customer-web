@@ -79,6 +79,20 @@ export function parseDeliveryServiceProductRow(
   };
 }
 
+/**
+ * Сагсны дэлгүүрийн `store_id` — зөвхөн жинхэнэ бараанаас (`is_service` биш).
+ * Хүргэлтийн service мөр (`is_service=1`) store_id-гүй тул алгасна.
+ */
+export function resolveCartStoreId(items: CartItem[]): string | null {
+  for (const item of items) {
+    if (item.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID) continue;
+    if (item.product.is_service === true) continue;
+    const sid = item.product.store_id?.trim();
+    if (sid) return sid;
+  }
+  return null;
+}
+
 export function buildDeliveryServiceCartItem(
   template: Product,
   transportFeePerCar: number,

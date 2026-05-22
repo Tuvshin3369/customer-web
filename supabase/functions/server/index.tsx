@@ -55,7 +55,7 @@ app.get("/make-server-f6232fa4/branches", async (c) => {
 
 // ─── Store config endpoint ────────────────────────────────────────────────────
 // Fetches store-level pricing for a specific store by id.
-// Required columns: base_price_per_km, min_delivery_fee, free_delivery_threshold
+// Required columns: base_price_per_km, min_delivery_fee, free_delivery_threshold, has_delivery
 // Query param: ?id=<store_id>
 app.get("/make-server-f6232fa4/store", async (c) => {
   try {
@@ -71,7 +71,7 @@ app.get("/make-server-f6232fa4/store", async (c) => {
 
     const { data, error } = await supabase
       .from("stores")
-      .select("base_price_per_km, min_delivery_fee, free_delivery_threshold")
+      .select("base_price_per_km, min_delivery_fee, free_delivery_threshold, has_delivery")
       .eq("id", storeId)
       .single();
 

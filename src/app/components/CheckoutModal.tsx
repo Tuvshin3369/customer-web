@@ -10,10 +10,10 @@ import {
   DELIVERY_SERVICE_CART_ITEM_ID,
   buildDeliveryServiceCartItem,
   parseDeliveryServiceProductRow,
+  resolveCartStoreId,
 } from '../lib/deliveryServiceCart';
 import { MapPickerModal, PickedLocation } from './MapPickerModal';
 import { calculateDistanceKm } from '../utils/haversine';
-import { projectId, publicAnonKey } from '/utils/supabase/info';
 import { PaymentInfoCard } from './PaymentInfoCard';
 import { buildCreditTransferNote } from '../lib/creditTransferNote';
 import {
@@ -81,6 +81,29 @@ interface StoreConfig {
   base_price_per_km:       number;
   min_delivery_fee:        number;
   free_delivery_threshold: number;
+  /** stores.has_delivery=1 үед «Хүргүүлнэ» идэвхтэй */
+  has_delivery?:           boolean | number | null;
+}
+
+function isStoreDeliveryEnabled(store: StoreConfig | null): boolean {
+  if (!store) return false;
+  const h = store.has_delivery;
+  if (h === true || h === 1 || h === '1') return true;
+  if (h === false || h === 0 || h === '0') return false;
+  return Number(h) === 1;
+}
+
+function storeRowToConfig(row: Record<string, unknown>): StoreConfig {
+  const num = (v: unknown): number => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    base_price_per_km: num(row.base_price_per_km),
+    min_delivery_fee: num(row.min_delivery_fee),
+    free_delivery_threshold: num(row.free_delivery_threshold),
+    has_delivery: row.has_delivery as StoreConfig['has_delivery'],
+  };
 }
 
 /** Гол салбар — төлбөрийн данс, утас */
@@ -144,19 +167,8 @@ export function CheckoutModal({
   onOrderSuccessClose,
 }: CheckoutModalProps) {
 
-  // ── Derive store_id from cart (бараа — is_service биш эхний мөр) ──────────
-  const storeId: string | null =
-    items.find((i) => !i.product.is_service)?.product?.store_id ??
-    items[0]?.product?.store_id ??
-    null;
-
-  const cartStoreIdForService = useMemo(
-    () =>
-      items.find((i) => !i.product.is_service)?.product?.store_id ??
-      items[0]?.product?.store_id ??
-      null,
-    [items],
-  );
+  /** products.store_id — зөвхөн is_service биш бараанаас (нэг дэлгүүр) */
+  const storeId = useMemo(() => resolveCartStoreId(items), [items]);
 
   // ── Sheet animation ────────────────────────────────────────────────────────
   const [mounted,  setMounted]  = useState(false);
@@ -334,7 +346,7 @@ export function CheckoutModal({
           return;
         }
         const row = json[0] as Record<string, unknown>;
-        setDeliveryServiceTemplate(parseDeliveryServiceProductRow(row, cartStoreIdForService));
+        setDeliveryServiceTemplate(parseDeliveryServiceProductRow(row, storeId));
       } catch {
         if (!cancelled) setDeliveryServiceTemplate(null);
       }
@@ -342,7 +354,7 @@ export function CheckoutModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, cartStoreIdForService]);
+  }, [isOpen, storeId]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -382,22 +394,44 @@ export function CheckoutModal({
     };
   }, [isLoggedIn, customerRegisterDb, mainBranchPayment]);
 
-  // ── Fetch store config ────────────────────────────────────────────────────
+  // ── Fetch store config (stores.has_delivery г.м.) — Supabase REST ─────────
   async function fetchStore() {
-    if (storeId === null) return;
+    if (!storeId) {
+      setStore(null);
+      setStoreError('Сагсанд дэлгүүрийн бараа олдсонгүй (store_id).');
+      return;
+    }
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+    if (!supabaseUrl?.trim() || !supabaseAnonKey?.trim()) {
+      setStoreError('Supabase тохиргоо дутуу байна.');
+      return;
+    }
     setIsLoadingStore(true);
     setStoreError('');
     try {
-      const res  = await fetch(
-        `https://${projectId}.supabase.co/functions/v1/make-server-f6232fa4/store?id=${storeId}`,
-        { headers: { Authorization: `Bearer ${publicAnonKey}` } },
-      );
-      const json = await res.json();
-      if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
-      setStore(json.data as StoreConfig);
-    } catch (err: any) {
+      const restBase = supabaseUrl.replace(/\/$/, '');
+      const headers = {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`,
+        Accept: 'application/json',
+      };
+      const q = new URLSearchParams({
+        select: 'base_price_per_km,min_delivery_fee,free_delivery_threshold,has_delivery',
+        id: `eq.${storeId}`,
+        limit: '1',
+      });
+      const res = await fetch(`${restBase}/rest/v1/stores?${q.toString()}`, { headers });
+      const json = await parseRestJson(res);
+      if (!res.ok || !Array.isArray(json) || json.length === 0) {
+        throw new Error('Дэлгүүрийн тохиргоо олдсонгүй.');
+      }
+      setStore(storeRowToConfig(json[0] as Record<string, unknown>));
+    } catch (err: unknown) {
       console.error('fetchStore error:', err);
-      setStoreError(err.message || 'Дэлгүүрийн тохиргоо ачааллаж чадсангүй');
+      setStore(null);
+      const msg = err instanceof Error ? err.message : 'Дэлгүүрийн тохиргоо ачааллаж чадсангүй';
+      setStoreError(msg);
     } finally {
       setIsLoadingStore(false);
     }
@@ -504,7 +538,7 @@ export function CheckoutModal({
       const hasServiceLine = items.some(
         (i) => i.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID || i.product.is_service === true,
       );
-      setDeliveryType(hasServiceLine ? 'delivery' : 'pickup');
+      setDeliveryType('pickup');
       setLocation(null); setLocationError('');
       setIsMapOpen(false);
       setSubmitted(false);
@@ -518,8 +552,8 @@ export function CheckoutModal({
       setCustomerRegisterDb(null);
       setPaymentDisplayError('');
       handledDeliveryCancelNonceRef.current = deliveryUiCancelNonce;
-      fetchStore();
-      fetchPaymentDisplayContext();
+      void fetchStore();
+      void fetchPaymentDisplayContext();
       // Auto-focus phone field after the slide-up animation completes
       const focusTimer = setTimeout(() => phoneInputRef.current?.focus(), 420);
       return () => clearTimeout(focusTimer);
@@ -562,6 +596,27 @@ export function CheckoutModal({
       cancelled = true;
     };
   }, [isOpen, isLoggedIn, customerGoogleId, customerPhone]);
+
+  /** stores.has_delivery — «Хүргүүлнэ» зөвшөөрөл, сагсанд service мөр байвал автомат сонголт */
+  useEffect(() => {
+    if (!isOpen || !store) return;
+    if (!isStoreDeliveryEnabled(store)) {
+      setDeliveryType((prev) => {
+        if (prev !== 'delivery') return prev;
+        setLocation(null);
+        setLocationError('');
+        onSyncDeliveryServiceLine?.(null);
+        return 'pickup';
+      });
+      return;
+    }
+    const hasServiceLine = items.some(
+      (i) => i.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID || i.product.is_service === true,
+    );
+    if (hasServiceLine) {
+      setDeliveryType((prev) => (prev === 'pickup' ? 'delivery' : prev));
+    }
+  }, [isOpen, store, items, onSyncDeliveryServiceLine]);
 
   // Body scroll lock
   useEffect(() => {
@@ -623,7 +678,10 @@ export function CheckoutModal({
     );
   }
 
+  const deliveryOptionEnabled = !isLoadingStore && isStoreDeliveryEnabled(store);
+
   function handleDeliveryChange(val: DeliveryType) {
+    if (val === 'delivery' && !deliveryOptionEnabled) return;
     setDeliveryType(val);
     if (val !== 'delivery') {
       setLocation(null); setLocationError('');
@@ -1005,31 +1063,50 @@ export function CheckoutModal({
                           ),
                       },
                     ] as const
-                  ).map(({ value, label, sub, icon, badge }) => (
+                  ).map(({ value, label, sub, icon, badge }) => {
+                    const isDeliveryOption = value === 'delivery';
+                    const optionDisabled = isDeliveryOption && !deliveryOptionEnabled;
+                    return (
                     <button
                       key={value}
                       type="button"
+                      disabled={optionDisabled}
                       onClick={() => handleDeliveryChange(value)}
                       className={`flex flex-col items-start gap-2 p-3 rounded-xl border text-left transition-colors ${
-                        deliveryType === value
-                          ? 'border-blue-500 bg-blue-50'
-                          : 'border-gray-200 bg-gray-50 hover:border-gray-300'
+                        optionDisabled
+                          ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                          : deliveryType === value
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 bg-gray-50 hover:border-gray-300'
                       }`}
                     >
-                      <div className={deliveryType === value ? 'text-blue-600' : 'text-gray-400'}>
+                      <div className={
+                        optionDisabled
+                          ? 'text-gray-300'
+                          : deliveryType === value
+                            ? 'text-blue-600'
+                            : 'text-gray-400'
+                      }>
                         {icon}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className={`text-sm font-semibold leading-tight ${
-                          deliveryType === value ? 'text-blue-700' : 'text-gray-700'
+                          optionDisabled
+                            ? 'text-gray-400'
+                            : deliveryType === value
+                              ? 'text-blue-700'
+                              : 'text-gray-700'
                         }`}>
                           {label}
                         </p>
-                        <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{sub}</p>
+                        <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">
+                          {optionDisabled ? 'Энэ дэлгүүрт идэвхгүй' : sub}
+                        </p>
                       </div>
                       {badge}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Очиж авах info */}
