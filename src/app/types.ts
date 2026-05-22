@@ -56,7 +56,7 @@ export interface Product {
   price: number;
   basePrice?: number;  // unit price used for calculations; falls back to price
   oldPrice?: number;
-  /** Нийт хөнгөлөлтийн хувь (барааны discount + брэндийн online_discount_percent) — V1/V2 үед үл хэрэглэнэ */
+  /** Нийт хөнгөлөлтийн хувь (барааны discount + категорийн online_discount_percent) — V1/V2 үед үл хэрэглэнэ */
   discount?: number;
   /** Хувийн V1/V2 үед */
   loyaltyPriceMode?: 'v1' | 'v2';

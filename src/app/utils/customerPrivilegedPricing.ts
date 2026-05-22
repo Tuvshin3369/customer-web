@@ -11,7 +11,7 @@ function intReportPercent(n: unknown): number {
   return Math.min(100, Math.max(0, Math.round(x)));
 }
 
-/** products.discount + brands.online_discount_percent (loyalty-с өмнөх нэгж) */
+/** products.discount + categories.online_discount_percent (loyalty-с өмнөх нэгж) */
 export function plannedStandardSaleBaseFromRetail(
   retail: number,
   catalogDiscountPct: number,

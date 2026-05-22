@@ -59,14 +59,23 @@ interface BrandRow {
   id: string;
   brand_name: string;
   order_number: number;
-  /** Онлайн зарах нэмэлт хөнгөлөлтийн хувь */
-  online_discount_percent: number;
 }
 
 interface CategoryRow {
   id: string;
   category_name: string;
   sequence_number: number;
+  /** categories.online_discount_percent — барааны онлайн хөнгөлөлт */
+  online_discount_percent: number;
+}
+
+function onlineDiscountForCategory(
+  categoryId: string,
+  byCategory: Record<string, number>,
+): number {
+  if (!categoryId) return 0;
+  const v = byCategory[categoryId];
+  return v != null && Number.isFinite(v) ? v : 0;
 }
 
 async function parseJsonSafely(res: Response): Promise<unknown> {
@@ -469,7 +478,7 @@ export default function App() {
     }
     try {
       const query = new URLSearchParams({
-        select: 'id,brand_name,order_number,online_discount_percent',
+        select: 'id,brand_name,order_number',
         store_id: `eq.${storeId}`,
         is_online_active: 'eq.true',
         order: 'order_number.asc',
@@ -497,7 +506,6 @@ export default function App() {
           order_number: typeof row.order_number === 'number' && Number.isFinite(row.order_number)
             ? row.order_number
             : Number(row.order_number ?? 0),
-          online_discount_percent: numField(row.online_discount_percent, 0),
         }))
         .filter((r) => r.id.length > 0 && r.brand_name.length > 0);
       setBrandRows(mapped);
@@ -525,7 +533,7 @@ export default function App() {
     }
     try {
       const query = new URLSearchParams({
-        select: 'id,category_name,sequence_number',
+        select: 'id,category_name,sequence_number,online_discount_percent',
         brand_id: `eq.${brandId}`,
         order: 'sequence_number.asc',
       });
@@ -552,6 +560,7 @@ export default function App() {
             typeof row.sequence_number === 'number' && Number.isFinite(row.sequence_number)
               ? row.sequence_number
               : Number(row.sequence_number ?? 0),
+          online_discount_percent: numField(row.online_discount_percent, 0),
         }))
         .filter((r) => r.id.length > 0 && r.category_name.length > 0);
       setCategoryRows(mapped);
@@ -565,10 +574,13 @@ export default function App() {
     fetchCategoriesForBrand(selectedBrandId || null);
   }, [selectedBrandId, fetchCategoriesForBrand]);
 
-  const selectedBrandOnlineDiscount = useMemo(() => {
-    const b = brandRows.find((x) => x.id === selectedBrandId);
-    return b != null ? numField(b.online_discount_percent, 0) : 0;
-  }, [brandRows, selectedBrandId]);
+  const categoryOnlineDiscountById = useMemo(() => {
+    const m: Record<string, number> = {};
+    categoryRows.forEach((c) => {
+      m[c.id] = numField(c.online_discount_percent, 0);
+    });
+    return m;
+  }, [categoryRows]);
 
   const fetchProductsForBrand = useCallback(async () => {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
@@ -578,7 +590,7 @@ export default function App() {
       return;
     }
     const restBase = supabaseUrl.replace(/\/$/, '');
-    const onlinePct = selectedBrandOnlineDiscount;
+    const categoryOnlinePct = categoryOnlineDiscountById;
     try {
       const query = new URLSearchParams({
         select: PRODUCTS_LIST_SELECT,
@@ -640,6 +652,7 @@ export default function App() {
           const retail = numField(row.retail_price, 0);
           const wholesale = numField(row.wholesale_price, 0);
           const productDisc = numField(row.discount, 0);
+          const onlinePct = onlineDiscountForCategory(cid, categoryOnlinePct);
           const plannedStd = plannedStandardSaleBaseFromRetail(retail, productDisc, onlinePct);
           const totalDiscRaw = productDisc + onlinePct;
           const totalDisc = Math.min(100, Math.max(0, totalDiscRaw));
@@ -664,10 +677,13 @@ export default function App() {
             if (!rrow) continue;
             const childStock = balanceByProduct[rid] ?? 0;
             if (!isCatalogChildRowVisible(rrow, childStock)) continue;
+            const childCid =
+              rrow.category_id != null && rrow.category_id !== '' ? String(rrow.category_id) : '';
+            const childOnlinePct = onlineDiscountForCategory(childCid, categoryOnlinePct);
             const child = mapRowToChildProduct(
               rrow,
               rid,
-              onlinePct,
+              childOnlinePct,
               childStock,
               selectedStoreId,
             );
@@ -746,7 +762,7 @@ export default function App() {
       console.error('fetchProductsForBrand error:', err);
       setProducts([]);
     }
-  }, [selectedStoreId, selectedBrandId, selectedBrandOnlineDiscount]);
+  }, [selectedStoreId, selectedBrandId, categoryOnlineDiscountById]);
 
   useEffect(() => {
     fetchProductsForBrand();
@@ -1332,7 +1348,7 @@ export default function App() {
         onConfirm={handleAddConfiguredItem}
         storeId={selectedStoreId}
         brandId={selectedBrandId || undefined}
-        onlineDiscountPercent={selectedBrandOnlineDiscount}
+        onlineDiscountPercent={configProduct?.onlineDiscountPctAtFetch ?? 0}
         loyaltyContext={isLoggedIn ? loyaltyCtx : null}
       />
       <ChildSelectionModal
