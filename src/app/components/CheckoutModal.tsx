@@ -153,6 +153,9 @@ const STEP_LABELS: Record<WizardStep, string> = {
   3: 'Төлбөр',
 };
 
+/** Такси — ачилтын коэффициентийн нийлбэр (тоо × loading_coefficient) дээд хязгаар */
+const TAXI_MAX_LOADING_SUM = 0.15;
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export function CheckoutModal({
   isOpen,
@@ -291,19 +294,27 @@ export function CheckoutModal({
     return roundTransportFeeToMnt1000(rawFee);
   }, [deliveryType, mainBranchRoute, store, isFreeDelivery]);
 
-  const deliveryCarCount = useMemo<number>(() => {
+  /** products.loading_coefficient × тоо — is_service биш бараанууд */
+  const cartLoadingCoeffSum = useMemo(() => {
     let sum = 0;
     for (const item of items) {
       if (item.product.is_service) continue;
+      if (item.cartItemId === DELIVERY_SERVICE_CART_ITEM_ID) continue;
       const coeff = item.product.loadingCoefficient;
       if (coeff == null || !Number.isFinite(coeff) || coeff < 0) continue;
       sum += item.quantity * coeff;
     }
-    const ceiled = Math.ceil(sum);
+    return sum;
+  }, [items]);
+
+  const taxiOptionEnabled = cartLoadingCoeffSum <= TAXI_MAX_LOADING_SUM;
+
+  const deliveryCarCount = useMemo<number>(() => {
+    const ceiled = Math.ceil(cartLoadingCoeffSum);
     const hasPhysical = items.some((i) => !i.product.is_service);
     if (!hasPhysical) return 1;
     return Math.max(1, ceiled);
-  }, [items]);
+  }, [items, cartLoadingCoeffSum]);
 
   const totalDeliveryCharge = useMemo<number>(() => {
     if (deliveryType !== 'delivery' || isFreeDelivery) return 0;
@@ -618,6 +629,13 @@ export function CheckoutModal({
     }
   }, [isOpen, store, items, onSyncDeliveryServiceLine]);
 
+  /** Ачилт > 0.15 бол «Такси»-г болиулж pickup руу */
+  useEffect(() => {
+    if (!isOpen) return;
+    if (cartLoadingCoeffSum <= TAXI_MAX_LOADING_SUM) return;
+    setDeliveryType((prev) => (prev === 'taxi' ? 'pickup' : prev));
+  }, [isOpen, cartLoadingCoeffSum]);
+
   // Body scroll lock
   useEffect(() => {
     if (isOpen) {
@@ -682,6 +700,7 @@ export function CheckoutModal({
 
   function handleDeliveryChange(val: DeliveryType) {
     if (val === 'delivery' && !deliveryOptionEnabled) return;
+    if (val === 'taxi' && !taxiOptionEnabled) return;
     setDeliveryType(val);
     if (val !== 'delivery') {
       setLocation(null); setLocationError('');
@@ -1065,7 +1084,15 @@ export function CheckoutModal({
                     ] as const
                   ).map(({ value, label, sub, icon, badge }) => {
                     const isDeliveryOption = value === 'delivery';
-                    const optionDisabled = isDeliveryOption && !deliveryOptionEnabled;
+                    const isTaxiOption = value === 'taxi';
+                    const optionDisabled =
+                      (isTaxiOption && !taxiOptionEnabled) ||
+                      (isDeliveryOption && !deliveryOptionEnabled);
+                    const disabledSub = isTaxiOption && !taxiOptionEnabled
+                      ? 'Таксинд ачих дээд хэмжээнээс хэтэрсэн'
+                      : isDeliveryOption && !deliveryOptionEnabled
+                        ? 'Энэ дэлгүүрт идэвхгүй'
+                        : sub;
                     return (
                     <button
                       key={value}
@@ -1100,7 +1127,7 @@ export function CheckoutModal({
                           {label}
                         </p>
                         <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">
-                          {optionDisabled ? 'Энэ дэлгүүрт идэвхгүй' : sub}
+                          {disabledSub}
                         </p>
                       </div>
                       {badge}
