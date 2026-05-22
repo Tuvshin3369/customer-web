@@ -88,12 +88,8 @@ export function buildPurchaseData(
   const totalOrders = items.length;
 
   const creditTotal = items.reduce((sum, item) => {
-    if (item.creditType === 'credit') {
-      const orderTotal = item.products.reduce((s, p) => s + p.price * p.quantity, 0);
-      return sum + orderTotal;
-    }
-    if (item.creditType === 'partial') return sum + (item.creditAmount ?? 0);
-    return sum;
+    if (item.creditType === 'paid') return sum;
+    return sum + (item.creditAmount ?? 0);
   }, 0);
 
   const now = new Date();
@@ -112,9 +108,7 @@ export function buildGroupedPurchaseData(
   const orders: GroupedPrintOrder[] = items.map(item => {
     const total = item.products.reduce((s, p) => s + p.price * p.quantity, 0);
     const creditAmount =
-      item.creditType === 'credit'  ? total :
-      item.creditType === 'partial' ? (item.creditAmount ?? 0) :
-      0;
+      item.creditType === 'paid' ? 0 : (item.creditAmount ?? 0);
     return {
       id:           item.id,
       date:         item.date.split(' ')[0],

@@ -144,7 +144,7 @@ function CreditButton({
 }) {
   if (type === 'paid') return null;
 
-  const creditAmt = type === 'partial' ? (amount ?? 0) : total;
+  const creditAmt = amount ?? 0;
 
   return (
     <button
@@ -448,11 +448,11 @@ function HistoryCard({
                     </span>
                   </div>
                 )}
-                {item.creditType === 'credit' && (
+                {item.creditType === 'credit' && item.creditAmount != null && (
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-amber-600">Бүрэн зээл</span>
                     <span className="text-sm text-amber-600 font-semibold">
-                      ₮{total.toLocaleString()}
+                      ₮{item.creditAmount.toLocaleString()}
                     </span>
                   </div>
                 )}
@@ -848,9 +848,8 @@ export function PurchaseHistoryPage({
   // ── Credit total ──────────────────────────────────────────────────────────
   const totalCredit = useMemo(() => {
     return filtered.reduce((sum, item) => {
-      if (item.creditType === 'credit')  return sum + calcTotal(item.products);
-      if (item.creditType === 'partial') return sum + (item.creditAmount ?? 0);
-      return sum;
+      if (item.creditType === 'paid') return sum;
+      return sum + (item.creditAmount ?? 0);
     }, 0);
   }, [filtered]);
 

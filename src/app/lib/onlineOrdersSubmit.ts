@@ -208,8 +208,6 @@ export function cartItemsToOnlineOrderRows(opts: {
       service_price,
       product_number: q,
       received_price,
-      /** Өнгийн кодтой захиалга */
-      is_pigment: hasCode,
       system_price: unitSystem,
       sold_price: unitSold,
       foam_size,

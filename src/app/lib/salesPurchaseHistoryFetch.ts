@@ -4,8 +4,8 @@
  * grouping: аль болох `document_id`, `sale_document_id`, … дээр суурьлана;
  *            байхгүй бол создан_at (сек) + branch_id + employee_id + ecommerce_phone гэж нэг суурьтай.
  *
- * Дэлгүүрийн нэр: branch_id → branches.name → employee.branch_id дамжуулаад →
- *                 эцэслэн product_id→products.store_id→stores.name
+ * Дэлгүүрийн нэр: branch_id → branches.store_id → stores.name
+ *                 (employee / product дамжуулан store_id resolve)
  *
  * RLS: `sales` дээр anon SELECT харилцагчийн `customer_id`-аар шүүх policy шаардлагатай.
  */
@@ -179,111 +179,256 @@ function saleGroupKey(row: Record<string, unknown>): string {
   return `${trunc}|${branch}|${emp}|${phone}`;
 }
 
-function inferCredit(head: Record<string, unknown>, orderTotalRounded: number): {
-  creditType: PurchaseCreditType;
-  creditAmount?: number;
-} {
-  /** Төлөгдсөн бүрэн бол */
-  const paidFlags = [
-    head.payment_completed,
-    head.is_paid,
-    head.payment_complete,
-    head.fully_paid,
-    head.ecommerce_payment_status,
-  ];
-  const explicitPaid =
-    paidFlags.some((x) => x === true || x === 1 || String(x).toLowerCase() === 'true')
-      ? true
-      : paidFlags.some((x) => x === false || x === 0) ? false : null;
-
-  const debtCandidates = [
-    head.remaining_debt,
-    head.remainder_amount,
-    head.remaining_amount,
-    head.debt_amount,
-    head.unpaid_amount,
-    head.balance_due,
-    head.loan_balance,
-    head.outstanding_balance,
-    head.credit_remainder,
-  ];
-  let debt = 0;
-  for (const c of debtCandidates) {
-    const n = Number(c);
-    if (Number.isFinite(n) && n > 0.01) {
-      debt = Math.max(debt, n);
-    }
-  }
-
-  /** Хэсэг хуваарилсан */
-  const partialFlag =
-    head.is_partial_payment === true ||
-    head.partial_payment === true ||
-    head.pay_kind === 'partial' ||
-    String(head.pay_type ?? '').toLowerCase() === 'partial';
-
-  if (explicitPaid === true || (explicitPaid !== false && debt <= 0.01 && !partialFlag))
-    return { creditType: 'paid' };
-
-  if (partialFlag || (debt > 0 && orderTotalRounded > 0 && debt < orderTotalRounded * 0.999)) {
-    return { creditType: 'partial', creditAmount: Math.round(Math.max(0, debt)) };
-  }
-  /** Бүрэн зээлийн үлдэгдэлтэй */
-  if (debt > 0) {
-    return { creditType: 'credit' };
-  }
-  return { creditType: 'credit' };
+/** PostgREST `in.(...)` — UUID-г хашилттай */
+function formatPostgrestInList(values: string[]): string {
+  return values
+    .map((v) => {
+      const s = v.trim();
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s)) {
+        return `"${s}"`;
+      }
+      return s;
+    })
+    .join(',');
 }
 
-const FETCH_CHUNK = 80;
+/** `payment_history.sales_id` → `sales.id` (PK) */
+function pickSaleRowId(row: Record<string, unknown>): string {
+  for (const k of ['id', 'sales_id', 'sale_id'] as const) {
+    const v = row[k];
+    if (v != null && String(v).trim()) return String(v).trim();
+  }
+  return '';
+}
 
-async function fetchBranchesByIds(
+function inferCreditFromPaymentAmount(
+  creditAmount: number,
+  orderTotalRounded: number,
+): { creditType: PurchaseCreditType; creditAmount?: number } {
+  if (creditAmount <= 0.01) return { creditType: 'paid' };
+  const rounded = Math.round(creditAmount);
+  if (orderTotalRounded > 0 && rounded < orderTotalRounded * 0.999) {
+    return { creditType: 'partial', creditAmount: rounded };
+  }
+  return { creditType: 'credit', creditAmount: rounded };
+}
+
+interface StoreCreditTypes {
+  typeIds: string[];
+  typeNames: string[];
+}
+
+/** `payment_history.payment_type` → `payment_types.id` (UUID) */
+const DEFAULT_PAYMENT_HISTORY_COLS: PaymentHistoryCols = {
+  saleCol: 'sales_id',
+  typeIdCol: 'payment_type',
+  typeNameCol: null,
+  amountCol: 'payment_amount',
+};
+
+/** Дэлгүүр бүрт `payment_types.is_credit=true` төлбөрийн төрөл */
+async function fetchCreditPaymentTypesByStoreIds(
   env: SupabaseEnv,
-  ids: string[],
-): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  if (ids.length === 0) return out;
+  storeIds: string[],
+): Promise<Record<string, StoreCreditTypes>> {
+  const out: Record<string, StoreCreditTypes> = {};
+  if (storeIds.length === 0) return out;
   const headers = restGetHeaders(env.anonKey);
-  for (let i = 0; i < ids.length; i += FETCH_CHUNK) {
-    const chunk = ids.slice(i, i + FETCH_CHUNK);
 
-    let json: unknown | null = null;
-    let ok = false;
-
-    try {
-      const q1 = new URLSearchParams({ select: 'id,name', id: `in.(${chunk.join(',')})` });
-      const res = await fetch(`${env.restBase}/rest/v1/branches?${q1.toString()}`, { headers });
-      json = await parseJsonSafely(res);
-      ok = res.ok && Array.isArray(json);
-    } catch {
-      ok = false;
-    }
-
-    if (!ok) {
-      try {
-        const q2 = new URLSearchParams({ select: 'id,branch_name', id: `in.(${chunk.join(',')})` });
-        const res2 = await fetch(`${env.restBase}/rest/v1/branches?${q2.toString()}`, { headers });
-        json = await parseJsonSafely(res2);
-        ok = res2.ok && Array.isArray(json);
-      } catch {
-        ok = false;
-      }
-    }
-
-    if (!ok || !Array.isArray(json)) continue;
+  const ingest = (json: unknown): void => {
+    if (!Array.isArray(json)) return;
     for (const row of json as Record<string, unknown>[]) {
-      const id = row.id != null ? String(row.id) : '';
+      const sid = row.store_id != null ? String(row.store_id).trim() : '';
+      if (!sid) continue;
+      const bucket = out[sid] ?? { typeIds: [], typeNames: [] };
+      const id = row.id != null ? String(row.id).trim() : '';
+      if (id && !bucket.typeIds.includes(id)) bucket.typeIds.push(id);
       const nm =
-        typeof row.name === 'string'
-          ? row.name.trim()
-          : typeof row.branch_name === 'string'
-            ? row.branch_name.trim()
+        typeof row.type === 'string'
+          ? row.type.trim()
+          : row.type != null
+            ? String(row.type).trim()
             : '';
-      if (id && nm) out[id] = nm;
+      if (nm && !bucket.typeNames.includes(nm)) bucket.typeNames.push(nm);
+      out[sid] = bucket;
+    }
+  };
+
+  for (let i = 0; i < storeIds.length; i += FETCH_CHUNK) {
+    const chunk = storeIds.slice(i, i + FETCH_CHUNK);
+    const q = new URLSearchParams({
+      select: 'id,store_id,type,is_credit',
+      store_id: `in.(${formatPostgrestInList(chunk)})`,
+      is_credit: 'eq.true',
+    });
+    try {
+      const res = await fetch(`${env.restBase}/rest/v1/payment_types?${q.toString()}`, {
+        headers,
+      });
+      const json = await parseJsonSafely(res);
+      if (res.ok) {
+        ingest(json);
+        continue;
+      }
+      /** store_id шүүлт алдаатай бол бүх зээлийн төрлийг авч client-side шүүнэ */
+      const qAll = new URLSearchParams({
+        select: 'id,store_id,type,is_credit',
+        is_credit: 'eq.true',
+      });
+      const resAll = await fetch(`${env.restBase}/rest/v1/payment_types?${qAll.toString()}`, {
+        headers,
+      });
+      const jsonAll = await parseJsonSafely(resAll);
+      if (!resAll.ok || !Array.isArray(jsonAll)) continue;
+      const chunkSet = new Set(chunk);
+      ingest(
+        (jsonAll as Record<string, unknown>[]).filter(
+          (r) => r.store_id != null && chunkSet.has(String(r.store_id).trim()),
+        ),
+      );
+    } catch {
+      /* */
     }
   }
   return out;
 }
+
+interface PaymentHistoryCols {
+  saleCol: string;
+  typeIdCol: string | null;
+  typeNameCol: string | null;
+  amountCol: string;
+}
+
+let paymentHistoryColsCache: PaymentHistoryCols | null = null;
+
+async function detectPaymentHistoryCols(env: SupabaseEnv): Promise<PaymentHistoryCols> {
+  if (paymentHistoryColsCache) return paymentHistoryColsCache;
+  const headers = restGetHeaders(env.anonKey);
+  try {
+    const q = new URLSearchParams({ select: '*', limit: '1' });
+    const res = await fetch(`${env.restBase}/rest/v1/payment_history?${q.toString()}`, {
+      headers,
+    });
+    const json = await parseJsonSafely(res);
+    if (!res.ok || !Array.isArray(json) || json.length === 0) {
+      paymentHistoryColsCache = DEFAULT_PAYMENT_HISTORY_COLS;
+      return paymentHistoryColsCache;
+    }
+    const keys = Object.keys(json[0] as Record<string, unknown>);
+    const saleCol =
+      keys.find((k) => k === 'sales_id') ??
+      keys.find((k) => k === 'sale_id') ??
+      keys.find((k) => /sale.*id/i.test(k)) ??
+      DEFAULT_PAYMENT_HISTORY_COLS.saleCol;
+    const typeIdCol =
+      keys.find((k) => k === 'payment_type_id') ??
+      keys.find((k) => k === 'payment_types_id') ??
+      keys.find((k) => k === 'payment_type') ??
+      keys.find((k) => k === 'type_id') ??
+      null;
+    const typeNameCol =
+      keys.find((k) => k === 'payment_type_name') ??
+      keys.find((k) => k === 'type_name') ??
+      null;
+    const amountCol =
+      keys.find((k) => k === 'payment_amount') ??
+      keys.find((k) => k === 'amount') ??
+      DEFAULT_PAYMENT_HISTORY_COLS.amountCol;
+    paymentHistoryColsCache = {
+      saleCol,
+      typeIdCol,
+      typeNameCol,
+      amountCol,
+    };
+    return paymentHistoryColsCache;
+  } catch {
+    paymentHistoryColsCache = DEFAULT_PAYMENT_HISTORY_COLS;
+    return paymentHistoryColsCache;
+  }
+}
+
+function paymentRowMatchesStoreCredit(
+  row: Record<string, unknown>,
+  cols: PaymentHistoryCols,
+  credit: StoreCreditTypes | undefined,
+): boolean {
+  if (!credit || (credit.typeIds.length === 0 && credit.typeNames.length === 0)) return false;
+
+  if (cols.typeIdCol) {
+    const pt = row[cols.typeIdCol];
+    const ptStr = pt != null ? String(pt).trim() : '';
+    if (ptStr && credit.typeIds.includes(ptStr)) return true;
+  }
+  if (cols.typeNameCol) {
+    const pt = row[cols.typeNameCol];
+    const ptStr = pt != null ? String(pt).trim() : '';
+    if (ptStr && credit.typeNames.some((n) => n === ptStr)) return true;
+  }
+  return false;
+}
+
+/**
+ * `payment_history`-аас борлуулалт бүрийн зээлийн `payment_amount` нийлбэр.
+ * branch_id → store_id → тухайн дэлгүүрийн `is_credit=true` төрөлтэй таарна.
+ */
+async function fetchCreditAmountBySaleIds(
+  env: SupabaseEnv,
+  saleIds: string[],
+  saleIdToStoreId: Record<string, string>,
+  creditByStore: Record<string, StoreCreditTypes>,
+): Promise<Record<string, number>> {
+  const out: Record<string, number> = {};
+  if (saleIds.length === 0) return out;
+
+  const cols = await detectPaymentHistoryCols(env);
+
+  const headers = restGetHeaders(env.anonKey);
+  const select = [...new Set([cols.saleCol, cols.amountCol, cols.typeIdCol, cols.typeNameCol])]
+    .filter((c): c is string => !!c)
+    .join(',');
+
+  const allCreditTypeIds = [
+    ...new Set(Object.values(creditByStore).flatMap((c) => c.typeIds)),
+  ];
+
+  for (let i = 0; i < saleIds.length; i += FETCH_CHUNK) {
+    const chunk = saleIds.slice(i, i + FETCH_CHUNK);
+    const q = new URLSearchParams({
+      select,
+      [cols.saleCol]: `in.(${formatPostgrestInList(chunk)})`,
+    });
+    if (cols.typeIdCol && allCreditTypeIds.length > 0) {
+      q.set(cols.typeIdCol, `in.(${formatPostgrestInList(allCreditTypeIds)})`);
+    }
+    try {
+      const res = await fetch(`${env.restBase}/rest/v1/payment_history?${q.toString()}`, {
+        headers,
+      });
+      const json = await parseJsonSafely(res);
+      if (!res.ok || !Array.isArray(json)) continue;
+      for (const row of json as Record<string, unknown>[]) {
+        const saleId =
+          row[cols.saleCol] != null ? String(row[cols.saleCol]).trim() : '';
+        if (!saleId) continue;
+        const storeId = saleIdToStoreId[saleId] ?? '';
+        const credit = storeId ? creditByStore[storeId] : undefined;
+        if (!paymentRowMatchesStoreCredit(row, cols, credit)) continue;
+        const amt = num(row[cols.amountCol]);
+        out[saleId] = (out[saleId] ?? 0) + amt;
+      }
+    } catch {
+      /* */
+    }
+  }
+
+  for (const k of Object.keys(out)) {
+    out[k] = Math.round(out[k]);
+  }
+  return out;
+}
+
+const FETCH_CHUNK = 80;
 
 async function fetchEmployeesBranchHints(
   env: SupabaseEnv,
@@ -296,7 +441,7 @@ async function fetchEmployeesBranchHints(
   for (let i = 0; i < ids.length; i += FETCH_CHUNK) {
     const chunk = ids.slice(i, i + FETCH_CHUNK);
     const q = new URLSearchParams({
-      id: `in.(${chunk.join(',')})`,
+      id: `in.(${formatPostgrestInList(chunk)})`,
       select: 'id,branch_id,store_id',
     });
     try {
@@ -397,7 +542,7 @@ async function fetchBranchStoreIdByIds(
     const chunk = ids.slice(i, i + FETCH_CHUNK);
     const q = new URLSearchParams({
       select: 'id,store_id',
-      id: `in.(${chunk.join(',')})`,
+      id: `in.(${formatPostgrestInList(chunk)})`,
     });
     try {
       const res = await fetch(`${env.restBase}/rest/v1/branches?${q.toString()}`, { headers });
@@ -527,29 +672,20 @@ async function fetchMainBranchBankByStoreIds(
 
 function resolveStoreNameForRow(
   row: Record<string, unknown>,
-  branchNames: Record<string, string>,
+  branchStoreById: Record<string, string>,
   branchByEmp: Record<string, string>,
   storeByEmp: Record<string, string>,
   storeByPid: Record<string, string>,
   storeNames: Record<string, string>,
 ): string {
-  const bid = row.branch_id != null ? String(row.branch_id).trim() : '';
-  if (bid && branchNames[bid]) return branchNames[bid];
-
-  const eid = row.employee_id != null ? String(row.employee_id).trim() : '';
-  if (eid) {
-    const eb = branchByEmp[eid];
-    if (eb && branchNames[eb]) return branchNames[eb];
-    const es = storeByEmp[eid];
-    if (es && storeNames[es]) return storeNames[es];
-  }
-
-  const pid = row.product_id != null ? String(row.product_id).trim() : '';
-  if (pid && storeByPid[pid]) {
-    const sid = storeByPid[pid];
-    if (storeNames[sid]) return storeNames[sid];
-  }
-
+  const storeId = resolveStoreIdForRow(
+    row,
+    branchStoreById,
+    branchByEmp,
+    storeByEmp,
+    storeByPid,
+  );
+  if (storeId && storeNames[storeId]) return storeNames[storeId];
   return '—';
 }
 
@@ -619,20 +755,18 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
 
   const usePersonalBank = !params.isLoggedIn;
 
-  const [branchNames, branchStoreById, empHints, prodHints, hasCompanyRegister] =
-    await Promise.all([
-      fetchBranchesByIds(env, branchIds),
-      fetchBranchStoreIdByIds(env, branchIds),
-      fetchEmployeesBranchHints(env, empIds),
-      fetchProductsStoreAndName(env, prodIds),
-      usePersonalBank
-        ? Promise.resolve(false)
-        : fetchCustomerHasCompanyRegister({
-            isLoggedIn: params.isLoggedIn,
-            phone: params.phone,
-            googleId: params.googleId,
-          }),
-    ]);
+  const [branchStoreById, empHints, prodHints, hasCompanyRegister] = await Promise.all([
+    fetchBranchStoreIdByIds(env, branchIds),
+    fetchEmployeesBranchHints(env, empIds),
+    fetchProductsStoreAndName(env, prodIds),
+    usePersonalBank
+      ? Promise.resolve(false)
+      : fetchCustomerHasCompanyRegister({
+          isLoggedIn: params.isLoggedIn,
+          phone: params.phone,
+          googleId: params.googleId,
+        }),
+  ]);
 
   const storeIdSet = new Set<string>(
     [
@@ -645,6 +779,31 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
     fetchStoresByIds(env, [...storeIdSet]),
     fetchMainBranchBankByStoreIds(env, [...storeIdSet], usePersonalBank || !hasCompanyRegister),
   ]);
+
+  const saleIdToStoreId: Record<string, string> = {};
+  const allSaleIds: string[] = [];
+  for (const raw of rows) {
+    const saleId = pickSaleRowId(raw);
+    if (!saleId) continue;
+    const storeId = resolveStoreIdForRow(
+      raw,
+      branchStoreById,
+      empHints.branchByEmp,
+      empHints.storeByEmp,
+      prodHints.storeByPid,
+    );
+    if (storeId) saleIdToStoreId[saleId] = storeId;
+    allSaleIds.push(saleId);
+  }
+  const uniqueSaleIds = [...new Set(allSaleIds)];
+  const uniqueStoreIds = [...new Set(Object.values(saleIdToStoreId))];
+  const creditByStore = await fetchCreditPaymentTypesByStoreIds(env, uniqueStoreIds);
+  const creditAmountBySaleId = await fetchCreditAmountBySaleIds(
+    env,
+    uniqueSaleIds,
+    saleIdToStoreId,
+    creditByStore,
+  );
 
   const groups = new Map<string, Record<string, unknown>[]>();
   for (const raw of rows) {
@@ -671,7 +830,7 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
     const phone = stringifyPhone(head.ecommerce_phone);
     const store = resolveStoreNameForRow(
       head,
-      branchNames,
+      branchStoreById,
       empHints.branchByEmp,
       empHints.storeByEmp,
       prodHints.storeByPid,
@@ -701,7 +860,18 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
     const orderTotal = products.reduce((s, p) => s + p.price * p.quantity, 0);
     const orderTotalR = Math.round(orderTotal);
 
-    const { creditType, creditAmount } = inferCredit(head, orderTotalR);
+    let groupCreditSum = 0;
+    const seenSaleIds = new Set<string>();
+    for (const r of arr) {
+      const sid = pickSaleRowId(r);
+      if (!sid || seenSaleIds.has(sid)) continue;
+      seenSaleIds.add(sid);
+      groupCreditSum += creditAmountBySaleId[sid] ?? 0;
+    }
+    const { creditType, creditAmount } = inferCreditFromPaymentAmount(
+      groupCreditSum,
+      orderTotalR,
+    );
 
     let bankInfo: PurchaseSaleBankInfo | undefined;
     for (const r of arr) {
