@@ -246,7 +246,7 @@ function HistoryCard({
         </span>
 
         {/* Дэлгүүрийн нэр — filter pill */}
-        <div className="w-24 shrink-0 flex items-center" onClick={e => e.stopPropagation()}>
+        <div className="w-32 shrink-0 flex items-center pr-5" onClick={e => e.stopPropagation()}>
           <button
             type="button"
             aria-pressed={isStoreActive}
@@ -264,25 +264,23 @@ function HistoryCard({
           </button>
         </div>
 
-        {/* Утас */}
-        <span className="w-28 shrink-0 text-sm text-gray-500 font-mono tracking-wider">
-          {item.phone}
-        </span>
-
-        {/* Нийт дүн */}
-        <span className="w-36 shrink-0 text-sm font-semibold text-gray-900 tabular-nums">
-          {fmt(total)}
-        </span>
-
-        {/* Зээлийн мэдээлэл */}
-        <div className="flex-1 flex items-center min-w-0">
-          <CreditButton
-            type={item.creditType}
-            amount={item.creditAmount}
-            total={total}
-            isActive={isCreditExpanded}
-            onClick={onCreditToggle}
-          />
+        {/* Утас, нийт дүн, зээл — stores.name-аас хол, баруун тийш 15mm */}
+        <div className="flex flex-1 items-center min-w-0 ml-[15mm] gap-6">
+          <span className="w-28 shrink-0 text-sm text-gray-500 font-mono tracking-wider">
+            {item.phone}
+          </span>
+          <span className="w-36 shrink-0 text-sm font-semibold text-gray-900 tabular-nums">
+            {fmt(total)}
+          </span>
+          <div className="flex-1 flex items-center min-w-0">
+            <CreditButton
+              type={item.creditType}
+              amount={item.creditAmount}
+              total={total}
+              isActive={isCreditExpanded}
+              onClick={onCreditToggle}
+            />
+          </div>
         </div>
 
         {/* Тэмдэглэл */}
@@ -353,8 +351,8 @@ function HistoryCard({
           </div>
         </div>
 
-        {/* Row 2: store filter pill + phone */}
-        <div className="mb-1" onClick={e => e.stopPropagation()}>
+        {/* Row 2: store filter pill */}
+        <div className="mb-2" onClick={e => e.stopPropagation()}>
           <button
             type="button"
             aria-pressed={isStoreActive}
@@ -371,14 +369,14 @@ function HistoryCard({
             <span className="overflow-hidden text-ellipsis whitespace-nowrap">{item.store}</span>
           </button>
         </div>
-        <span className="block text-sm text-gray-600 font-mono tracking-wider mb-2.5">
-          {item.phone}
-        </span>
 
-        {/* Row 3: total + credit button + chevron */}
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-gray-900 tabular-nums">
+        {/* Row 3: утас, нийт дүн, зээл — баруун тийш 15mm */}
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-2.5 ml-[15mm]">
+          <div className="flex items-center gap-4 flex-wrap min-w-0">
+            <span className="text-sm text-gray-600 font-mono tracking-wider shrink-0">
+              {item.phone}
+            </span>
+            <span className="text-sm font-semibold text-gray-900 tabular-nums shrink-0">
               {fmt(total)}
             </span>
             <div onClick={e => e.stopPropagation()}>
