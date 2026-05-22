@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { X, Plus, Minus, ShoppingCart, Layers } from 'lucide-react';
 import { Product, ChildProduct, CartItem } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
+import { displayStock } from '../utils/displayStock';
 
 interface ChildSelectionModalProps {
   parentProduct: Product | null;
@@ -164,7 +165,7 @@ export function ChildSelectionModal({
               </h2>
               <p className="text-xs text-gray-500 mt-0.5">
                 Нийт үлдэгдэл:{' '}
-                <span className="font-semibold text-gray-700">{totalStock}</span>
+                <span className="font-semibold text-gray-700">{displayStock(totalStock)}</span>
               </p>
             </div>
             <button
@@ -253,8 +254,10 @@ function ChildRow({ child, quantity, onDecrement, onIncrement }: ChildRowProps) 
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             <p className="text-[11px] text-gray-400">
               Үлдэгдэл:{' '}
-              <span className={`font-semibold ${child.stock <= 2 ? 'text-red-500' : 'text-gray-600'}`}>
-                {child.stock}
+              <span
+                className={`font-semibold ${displayStock(child.stock) <= 2 ? 'text-red-500' : 'text-gray-600'}`}
+              >
+                {displayStock(child.stock)}
               </span>
             </p>
             <div className="flex items-center gap-1">

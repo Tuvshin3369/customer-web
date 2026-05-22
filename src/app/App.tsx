@@ -25,10 +25,16 @@ import { GuestOrdersPage } from './components/GuestOrdersPage';
 import { JobsPage } from './components/JobsPage';
 import { ApplicationPage } from './components/ApplicationPage';
 import { Product, CartItem, ChildProduct, FoamRangeRow } from './types';
+import {
+  filterCatalogChildren,
+  isCatalogChildRowVisible,
+  isCatalogProductVisible,
+} from './utils/catalogProductVisibility';
 import { calculateTotal } from './utils/priceCalc';
 import { DELIVERY_SERVICE_CART_ITEM_ID } from './lib/deliveryServiceCart';
 import { fetchCustomerIdForAnket } from './lib/anketApi';
 import {
+  canGetRawMaterialsForBrand,
   EMPTY_CUSTOMER_LOYALTY_CONTEXT,
   fetchCustomerLoyaltyContext,
   type CustomerLoyaltyContext,
@@ -217,7 +223,7 @@ const RELATED_PRODUCT_KEYS = [
 ] as const;
 
 const PRODUCTS_LIST_SELECT =
-  'id,product_name,product_images,product_manual,retail_price,wholesale_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,is_service,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
+  'id,product_name,product_images,product_manual,retail_price,wholesale_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,is_raw_material,is_inactive,is_service,loading_coefficient,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
 
 function mapRowToChildProduct(
   row: Record<string, unknown>,
@@ -257,6 +263,10 @@ function mapRowToChildProduct(
         ? String(catalogStoreId).trim()
         : undefined,
     receivedPrice: numField(row.received_price, 0),
+    is_raw_material:
+      row.is_raw_material === true ||
+      row.is_raw_material === 1 ||
+      row.is_raw_material === '1',
     imageUrl: img,
     images: imageUrls.length > 0 ? imageUrls : undefined,
   };
@@ -652,11 +662,13 @@ export default function App() {
           for (const rid of relatedIdsOrdered) {
             const rrow = relatedRowById[rid];
             if (!rrow) continue;
+            const childStock = balanceByProduct[rid] ?? 0;
+            if (!isCatalogChildRowVisible(rrow, childStock)) continue;
             const child = mapRowToChildProduct(
               rrow,
               rid,
               onlinePct,
-              balanceByProduct[rid] ?? 0,
+              childStock,
               selectedStoreId,
             );
             if (child) children.push(child);
@@ -681,7 +693,18 @@ export default function App() {
             brandId: row.brand_id != null && row.brand_id !== '' ? String(row.brand_id) : undefined,
             servicePrice: numField(row.service_price, 0),
             receivedPrice: numField(row.received_price, 0),
-            is_pigment: row.is_pigment === true,
+            is_pigment:
+              row.is_pigment === true ||
+              row.is_pigment === 1 ||
+              row.is_pigment === '1',
+            is_raw_material:
+              row.is_raw_material === true ||
+              row.is_raw_material === 1 ||
+              row.is_raw_material === '1',
+            is_inactive:
+              row.is_inactive === true ||
+              row.is_inactive === 1 ||
+              row.is_inactive === '1',
             is_service: row.is_service === true,
             loadingCoefficient: (() => {
               const lc = numField(row.loading_coefficient, 0);
@@ -706,7 +729,10 @@ export default function App() {
             children: children.length > 0 ? children : undefined,
           } satisfies Product;
         })
-        .filter((p) => p.id.length > 0 && p.name.length > 0);
+        .filter((p) => p.id.length > 0 && p.name.length > 0)
+        /** Түүхий эдийг state-д үлдээх — дэлгэцэнд loyalty-ээр шүүнэ */
+        .filter((p) => isCatalogProductVisible(p, { canGetRawMaterials: true }))
+        .filter((p) => !(p.isParent && (!p.children || p.children.length === 0)));
 
       const hasFoamProduct = mapped.some((p) => p.is_foam_range);
       const storeFoamRanges = hasFoamProduct
@@ -777,7 +803,11 @@ export default function App() {
       });
       if (cancelled) return;
       if (!cid?.trim()) {
-        setLoyaltyCtx({ privilegesByBrand: {} });
+        setLoyaltyCtx({
+          privilegesByBrand: {},
+          rawMaterialsByBrand: {},
+          rawMaterialsAnyBrand: false,
+        });
         return;
       }
       const ctx = await fetchCustomerLoyaltyContext(rawUrl, rawKey, cid.trim());
@@ -1032,16 +1062,26 @@ export default function App() {
     return m;
   }, [categoryRows]);
 
+  const canGetRawMaterials =
+    isLoggedIn && canGetRawMaterialsForBrand(loyaltyCtx, selectedBrandId);
+
   const productsLabeled = useMemo(
     () =>
       displayProductsWithLoyalty
-        .filter((p) => !p.is_service)
         .map((p) => {
           const cid = p.categoryId != null && p.categoryId !== '' ? String(p.categoryId) : '';
           const label = cid && categoryNameById[cid] ? categoryNameById[cid] : 'Бусад';
-          return { ...p, category: label };
-        }),
-    [displayProductsWithLoyalty, categoryNameById],
+          const children = filterCatalogChildren(p.children, { canGetRawMaterials });
+          return {
+            ...p,
+            category: label,
+            children,
+            isParent: (children?.length ?? 0) > 0,
+          };
+        })
+        .filter((p) => isCatalogProductVisible(p, { canGetRawMaterials }))
+        .filter((p) => !(p.isParent && (!p.children || p.children.length === 0))),
+    [displayProductsWithLoyalty, categoryNameById, canGetRawMaterials],
   );
 
   const categoryNames = useMemo(

@@ -22,11 +22,27 @@ export type LoyaltyPrivilegeRow =
 export interface CustomerLoyaltyContext {
   /** Брэнд бүрээр давуу эрх — зөвхөн нэмэлт SKU дээр V1/V2 */
   privilegesByBrand: Record<string, LoyaltyPrivilegeRow>;
+  /** brand_id → customer_status.can_get_raw_materials=1 */
+  rawMaterialsByBrand: Record<string, boolean>;
+  /** brand_id хоосон мөрөнд can_get_raw_materials=1 — бүх брэнд */
+  rawMaterialsAnyBrand: boolean;
 }
 
 export const EMPTY_CUSTOMER_LOYALTY_CONTEXT: CustomerLoyaltyContext = Object.freeze({
   privilegesByBrand: {},
+  rawMaterialsByBrand: {},
+  rawMaterialsAnyBrand: false,
 });
+
+export function canGetRawMaterialsForBrand(
+  ctx: CustomerLoyaltyContext | null | undefined,
+  brandId: string | null | undefined,
+): boolean {
+  if (!ctx) return false;
+  if (ctx.rawMaterialsAnyBrand) return true;
+  if (!brandId?.trim()) return false;
+  return ctx.rawMaterialsByBrand[brandId.trim()] === true;
+}
 
 function pickDiscountPercentForVolume(
   volume: number,
@@ -49,6 +65,34 @@ interface StatusApiRow {
   brand_id?: unknown;
   wholesale_price?: unknown;
   can_get_discount?: unknown;
+  can_get_raw_materials?: unknown;
+}
+
+function flagIsOn(v: unknown): boolean {
+  return v === true || v === 1 || v === '1';
+}
+
+function buildRawMaterialsAccess(rows: unknown): {
+  rawMaterialsByBrand: Record<string, boolean>;
+  rawMaterialsAnyBrand: boolean;
+} {
+  const rawMaterialsByBrand: Record<string, boolean> = {};
+  let rawMaterialsAnyBrand = false;
+  if (!Array.isArray(rows)) {
+    return { rawMaterialsByBrand, rawMaterialsAnyBrand };
+  }
+  for (const raw of rows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as StatusApiRow;
+    if (!flagIsOn(row.can_get_raw_materials)) continue;
+    const bid = row.brand_id != null ? String(row.brand_id).trim() : '';
+    if (!bid) {
+      rawMaterialsAnyBrand = true;
+      continue;
+    }
+    rawMaterialsByBrand[bid] = true;
+  }
+  return { rawMaterialsByBrand, rawMaterialsAnyBrand };
 }
 
 function num(v: unknown): number {
@@ -121,7 +165,9 @@ export async function fetchCustomerLoyaltyContext(restBaseRaw: string, anonKeyRa
   const restBase = restBaseRaw.replace(/\/$/, '').trim();
   const anonKey = anonKeyRaw.trim();
   const customerId = customerIdRaw.trim();
-  if (!restBase || !anonKey || !customerId) return { privilegesByBrand: {} };
+  if (!restBase || !anonKey || !customerId) {
+    return { privilegesByBrand: {}, rawMaterialsByBrand: {}, rawMaterialsAnyBrand: false };
+  }
 
   const headers = {
     apikey: anonKey,
@@ -130,7 +176,7 @@ export async function fetchCustomerLoyaltyContext(restBaseRaw: string, anonKeyRa
   };
 
   const stQ = new URLSearchParams({
-    select: 'brand_id,wholesale_price,can_get_discount',
+    select: 'brand_id,wholesale_price,can_get_discount,can_get_raw_materials',
     customer_id: `eq.${customerId}`,
   });
 
@@ -151,7 +197,11 @@ export async function fetchCustomerLoyaltyContext(restBaseRaw: string, anonKeyRa
     byBrandRaw.set(bid, raw);
   }
 
-  if (byBrandRaw.size === 0) return { privilegesByBrand: {} };
+  const { rawMaterialsByBrand, rawMaterialsAnyBrand } = buildRawMaterialsAccess(statusRows);
+
+  if (byBrandRaw.size === 0) {
+    return { privilegesByBrand: {}, rawMaterialsByBrand, rawMaterialsAnyBrand };
+  }
 
   const privilegesByBrand: Record<string, LoyaltyPrivilegeRow> = {};
   const brandsV2NeedingIntervals: string[] = [];
@@ -176,7 +226,9 @@ export async function fetchCustomerLoyaltyContext(restBaseRaw: string, anonKeyRa
     }
   }
 
-  if (brandsV2NeedingIntervals.length === 0) return { privilegesByBrand };
+  if (brandsV2NeedingIntervals.length === 0) {
+    return { privilegesByBrand, rawMaterialsByBrand, rawMaterialsAnyBrand };
+  }
 
   const spendByBrand =
     brandsV2NeedingIntervals.length > 0
@@ -224,7 +276,7 @@ export async function fetchCustomerLoyaltyContext(restBaseRaw: string, anonKeyRa
     privilegesByBrand[bid] = { kind: 'v2', loyaltyDiscountPercent: tierPct };
   }
 
-  return { privilegesByBrand };
+  return { privilegesByBrand, rawMaterialsByBrand, rawMaterialsAnyBrand };
 }
 
 /**

@@ -16,6 +16,7 @@ import type { CustomerLoyaltyContext } from '../lib/customerLoyaltyContext';
 import { applyLoyaltyToProduct, applyFoamCatalogUnitToLoyalty, foamCatalogDiscountPercent } from '../utils/customerPrivilegedPricing';
 import { ProductGallery } from './ProductGallery';
 import { ProductManualSheet } from './ProductManualSheet';
+import { displayStock } from '../utils/displayStock';
 
 interface ProductConfigModalProps {
   product: Product | null;
@@ -1092,7 +1093,8 @@ export function ProductConfigModal({
                 </span>
               ) : (
                 <span className="text-xs text-gray-500 shrink-0">
-                  Үлдэгдэл: <span className="font-medium text-gray-600">{effectiveProduct.stock}</span>
+                  Үлдэгдэл:{' '}
+                  <span className="font-medium text-gray-600">{displayStock(effectiveProduct.stock)}</span>
                 </span>
               )}
             </div>
@@ -1181,8 +1183,14 @@ export function ProductConfigModal({
                         <div className="flex items-center gap-2 mt-0.5">
                           <span className="text-[10px] text-gray-400">
                             Үлдэгдэл:{' '}
-                            <span className={child.stock <= 2 ? 'text-red-500 font-semibold' : 'text-gray-600'}>
-                              {child.stock}
+                            <span
+                              className={
+                                displayStock(child.stock) <= 2
+                                  ? 'text-red-500 font-semibold'
+                                  : 'text-gray-600'
+                              }
+                            >
+                              {displayStock(child.stock)}
                             </span>
                           </span>
                           <span className="text-[10px] text-blue-600 font-semibold">

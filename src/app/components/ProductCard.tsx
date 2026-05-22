@@ -1,6 +1,7 @@
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Product } from '../types';
 import { productCardDiscountPercent } from '../lib/customerLoyaltyContext';
+import { displayStock } from '../utils/displayStock';
 
 interface ProductCardProps {
   product: Product;
@@ -98,7 +99,7 @@ export function ProductCard({
           )}
         </div>
 
-        <p className="text-xs text-gray-500">Үлдэгдэл: {product.stock}</p>
+        <p className="text-xs text-gray-500">Үлдэгдэл: {displayStock(product.stock)}</p>
       </div>
 
     </div>

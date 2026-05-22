@@ -19,6 +19,7 @@ export interface FoamRangeRow {
 export interface ChildProduct {
   id: number | string;
   name: string;
+  is_raw_material?: boolean | number;
   stock: number;
   /** Нэгж зарах үнэ (сонгосон давуу эрхтэй) */
   price: number;
@@ -91,12 +92,17 @@ export interface Product {
   is_calculate_length?: boolean;
   /** Хүргэлтийн системийн бараа (сагсанд зөвхөн checkout-оос нэмэгдэнэ) */
   is_service?: boolean;
+  /** 1 бол каталогт харуулахгүй */
+  is_inactive?: boolean | number;
   /** coded_paints шүүхэд: groups.id → groups.group_number */
   groupId?: string;
   servicePrice?: number;
   /** products.received_price — борлуулалтын бүртгэл / online_orders */
   receivedPrice?: number;
-  is_pigment?: boolean;
+  /** 1 бол каталогт харуулахгүй */
+  is_pigment?: boolean | number;
+  /** 1 бол түүхий эд — зөвхөн can_get_raw_materials=1 харилцагчид */
+  is_raw_material?: boolean | number;
   brandId?: string;
   // ── Parent product fields ─────────────────────────────────────────────────
   /** related_product_* эсвэл children — ProductConfigModal-д «Нэмэлт бараа авах» */
