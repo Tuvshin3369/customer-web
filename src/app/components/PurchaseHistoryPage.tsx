@@ -12,6 +12,11 @@ import { buildGroupedPurchaseData }        from '../../lib/print/buildPurchaseDa
 import type { GroupedPrintData }           from '../../lib/print/buildPurchaseData';
 import { PaymentInfoCard } from './PaymentInfoCard';
 import {
+  fetchCustomerProfileByPhone,
+  fetchCustomerProfileByGoogleId,
+  formatCustomerPhoneDisplay,
+} from '../lib/customersRegister';
+import {
   fetchSalesPurchaseHistoryGrouped,
   type PurchaseHistoryGroupedSale,
   type PurchaseSaleBankInfo,
@@ -920,13 +925,35 @@ export function PurchaseHistoryPage({
   }
 
   /** Header "Хэвлэх" — grouped PurchaseHistoryPrint */
-  function handlePrintAll() {
+  async function handlePrintAll() {
+    let customerOrganizationName = '';
+    let customerPhoneLine = '';
+
+    if (isLoggedIn) {
+      try {
+        if (customerPhone != null) {
+          const profile = await fetchCustomerProfileByPhone(customerPhone);
+          customerOrganizationName = profile.organization_name;
+          customerPhoneLine = `Утас : +976 ${formatCustomerPhoneDisplay(customerPhone)}`;
+        } else if (customerGoogleId) {
+          const profile = await fetchCustomerProfileByGoogleId(customerGoogleId);
+          customerOrganizationName = profile.organization_name;
+        }
+      } catch {
+        /* профайл байхгүй бол хоосон үлдэнэ */
+      }
+    }
+
     const data = buildGroupedPurchaseData(displayed, {
       dateFrom:    appliedStart  || undefined,
       dateTo:      appliedEnd    || undefined,
       productName: appliedName.trim() || undefined,
     });
-    setPrintData(data);
+    setPrintData({
+      ...data,
+      customerOrganizationName,
+      customerPhoneLine,
+    });
   }
 
   /** Row printer icon → opens /sales-history-print.html in a popup window,

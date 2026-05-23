@@ -18,10 +18,7 @@ import type {
 } from '../../../lib/print/buildPurchaseData';
 
 // ── Company constants — replace with real values ──────────────────────────────
-const COMPANY_NAME     = 'Таны Компани ХХК';
-const COMPANY_PHONE    = '+976 9911-0000';
-const COMPANY_ADDRESS  = 'Улаанбаатар хот, Чингэлтэй дүүрэг';
-const COMPANY_REGISTER = 'РД: 1234567';
+const DEFAULT_ORG_NAME = '—';
 
 const A4_WIDTH_MM           = 210;
 const MARGIN_SIDE_MM        = 14;
@@ -298,12 +295,15 @@ interface HeaderProps {
   hasAnyFilter: boolean;
   hasDateFilter: boolean;
   hasProductFilter: boolean;
+  organizationName: string;
+  customerPhoneLine: string;
   className?:  string;
 }
 
 function DocumentHeader({
   filters, printedAt, orderCount, totalRows,
-  hasAnyFilter, hasDateFilter, hasProductFilter, className,
+  hasAnyFilter, hasDateFilter, hasProductFilter,
+  organizationName, customerPhoneLine, className,
 }: HeaderProps) {
   return (
     <div className={className} style={{ padding: '14px 14px 0' }}>
@@ -313,11 +313,13 @@ function DocumentHeader({
             ХУДАЛДАН АВАЛТЫН ТҮҮХ
           </p>
           <p style={{ fontSize: '11px', fontWeight: 600, color: '#333', marginBottom: '2px' }}>
-            {COMPANY_NAME}
+            {organizationName || DEFAULT_ORG_NAME}
           </p>
-          <p style={{ fontSize: '10px', color: '#555', lineHeight: '1.5' }}>
-            {COMPANY_PHONE} &nbsp;|&nbsp; {COMPANY_ADDRESS} &nbsp;|&nbsp; {COMPANY_REGISTER}
-          </p>
+          {customerPhoneLine ? (
+            <p style={{ fontSize: '10px', color: '#555', lineHeight: '1.5' }}>
+              {customerPhoneLine}
+            </p>
+          ) : null}
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0, paddingLeft: '12px' }}>
           {hasAnyFilter && (
@@ -523,7 +525,11 @@ interface Props {
 }
 
 export function PurchaseHistoryPrint({ data, onClose }: Props) {
-  const { orders, grandTotal, creditTotal, filters, printedAt } = data;
+  const {
+    orders, grandTotal, creditTotal, filters, printedAt,
+    customerOrganizationName = '',
+    customerPhoneLine = '',
+  } = data;
 
   const totalRows        = orders.reduce((s, o) => s + o.products.length, 0);
   const hasDateFilter    = !!(filters.dateFrom || filters.dateTo);
@@ -539,6 +545,8 @@ export function PurchaseHistoryPrint({ data, onClose }: Props) {
   const headerProps = {
     filters, printedAt, orderCount: orders.length, totalRows,
     hasAnyFilter, hasDateFilter, hasProductFilter,
+    organizationName: customerOrganizationName,
+    customerPhoneLine,
   };
 
   useLayoutEffect(() => {
@@ -563,7 +571,7 @@ export function PurchaseHistoryPrint({ data, onClose }: Props) {
     };
 
     setOrderPages(paginateOrdersByHeight(orders, heights));
-  }, [orders, grandTotal, creditTotal, hasAnyFilter, filters, printedAt, totalRows]);
+  }, [orders, grandTotal, creditTotal, hasAnyFilter, filters, printedAt, totalRows, customerOrganizationName, customerPhoneLine]);
 
   useEffect(() => {
     const styleEl = document.createElement('style');

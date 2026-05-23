@@ -37,7 +37,7 @@ export interface PurchaseHistoryGroupedSale {
   id: string;
   date: string;
   store: string;
-  phone: string;
+  phone: string; /** sales.ecommerce_phone — null бол хоосон */
   note?: string;
   creditType: PurchaseCreditType;
   creditAmount?: number;
@@ -860,22 +860,23 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
           ? head.sold_date
           : new Date().toISOString();
 
-    /** Гүйлгээний утга / мөр — эхлээд customers.phone, байхгүй бол sales.ecommerce_phone */
-    let phone = customerPhoneFallback;
+    /** Борлуулалтын мөр / хэвлэл — зөвхөн sales.ecommerce_phone */
+    let phone = stringifyPhone(head.ecommerce_phone);
     if (!phone) {
-      phone = stringifyPhone(head.ecommerce_phone);
-      if (!phone) {
-        for (const r of arr) {
-          const p = stringifyPhone(r.ecommerce_phone);
-          if (p) {
-            phone = p;
-            break;
-          }
+      for (const r of arr) {
+        const p = stringifyPhone(r.ecommerce_phone);
+        if (p) {
+          phone = p;
+          break;
         }
       }
     }
 
-    const transferNote = buildCreditTransferNote(created, phone);
+    /** Гүйлгээний утга — customers.phone эхний сонголт, байхгүй бол ecommerce_phone */
+    let phoneForTransfer = customerPhoneFallback;
+    if (!phoneForTransfer) phoneForTransfer = phone;
+
+    const transferNote = buildCreditTransferNote(created, phoneForTransfer);
     const store = resolveStoreNameForRow(
       head,
       branchStoreById,

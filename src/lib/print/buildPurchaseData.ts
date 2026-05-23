@@ -60,6 +60,10 @@ export interface GroupedPrintData {
   creditTotal: number;
   filters:     PrintFilters;
   printedAt:   string;
+  /** Хэвлэлийн толгой — customers.organization_name */
+  customerOrganizationName?: string;
+  /** Хэвлэлийн толгой — «Утас : +976 …» */
+  customerPhoneLine?: string;
 }
 
 // ─── Builder (flat) ───────────────────────────────────────────────────────────
