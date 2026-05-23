@@ -1058,27 +1058,33 @@ export function CheckoutModal({
                       {
                         value: 'pickup' as const,
                         label: 'Очиж авах',
-                        sub:   'Дэлгүүрээс авна',
+                        sub:   'Та дэлгүүрээс авна',
                         icon:  <Store className="w-4 h-4" />,
                         badge: <span className="text-[10px] font-bold text-green-600">Үнэгүй</span>,
                       },
                       {
                         value: 'taxi' as const,
                         label: 'Такси',
-                        sub:   'Жолоочид төлнө',
+                        sub:   'Та такси төлнө',
                         icon:  <Truck className="w-4 h-4" />,
                         badge: <span className="text-[10px] font-bold text-green-600">Үнэгүй</span>,
                       },
                       {
                         value: 'delivery' as const,
                         label: 'Хүргүүлнэ',
-                        sub:   'Манай хүргэлт',
+                        sub: (
+                          <>
+                            Маргааш нь хүргэнэ
+                            <br />
+                            ( Даваа-д амарна )
+                          </>
+                        ),
                         icon:  <MapPin className="w-4 h-4" />,
                         badge:
                           isLoadingStore || isLoadingPaymentDisplay ? (
                             <Loader2 className="w-3 h-3 animate-spin text-gray-300" />
                           ) : (
-                            <span className="text-[10px] text-gray-400">км тооцоо</span>
+                            <span className="text-[10px] font-bold text-green-600">км тооцно</span>
                           ),
                       },
                     ] as const
