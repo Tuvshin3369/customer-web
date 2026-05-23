@@ -179,6 +179,57 @@ async function fetchGoodsBalanceTotals(
   return totals;
 }
 
+/** online_orders — бараа бүрээр захиалсан тоо (бусад харилцагчийн захиалга хасах) */
+async function fetchOnlineOrderReservedByProduct(
+  restBase: string,
+  anonKey: string,
+  productIds: string[],
+  storeId: string,
+): Promise<Record<string, number>> {
+  const totals: Record<string, number> = {};
+  if (productIds.length === 0 || !storeId) return totals;
+  const headers = {
+    apikey: anonKey,
+    Authorization: `Bearer ${anonKey}`,
+    Accept: 'application/json',
+  };
+  for (let i = 0; i < productIds.length; i += GOODS_BALANCE_CHUNK) {
+    const chunk = productIds.slice(i, i + GOODS_BALANCE_CHUNK);
+    const query = new URLSearchParams({
+      select: 'product_id,product_number',
+      store_id: `eq.${storeId}`,
+      product_id: `in.(${chunk.join(',')})`,
+    });
+    try {
+      const res = await fetch(`${restBase}/rest/v1/online_orders?${query.toString()}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok || !Array.isArray(json)) continue;
+      for (const row of json as Record<string, unknown>[]) {
+        const pid = row.product_id != null ? String(row.product_id) : '';
+        if (!pid) continue;
+        totals[pid] = (totals[pid] ?? 0) + numField(row.product_number, 0);
+      }
+    } catch {
+      /* RLS */
+    }
+  }
+  return totals;
+}
+
+function availableStockByProduct(
+  balanceByProduct: Record<string, number>,
+  reservedByProduct: Record<string, number>,
+  productIds: string[],
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const pid of productIds) {
+    const bal = balanceByProduct[pid] ?? 0;
+    const reserved = reservedByProduct[pid] ?? 0;
+    out[pid] = Math.max(0, bal - reserved);
+  }
+  return out;
+}
+
 function mapFoamRangeApiRow(raw: Record<string, unknown>): FoamRangeRow | null {
   const pr = numField(raw.price, NaN);
   if (!Number.isFinite(pr)) return null;
@@ -627,6 +678,17 @@ export default function App() {
       }
       const balanceIds = [...new Set([...productIds, ...relatedIdSet])];
       const balanceByProduct = await fetchGoodsBalanceTotals(restBase, supabaseAnonKey, balanceIds);
+      const reservedByProduct = await fetchOnlineOrderReservedByProduct(
+        restBase,
+        supabaseAnonKey,
+        balanceIds,
+        selectedStoreId,
+      );
+      const stockByProduct = availableStockByProduct(
+        balanceByProduct,
+        reservedByProduct,
+        balanceIds,
+      );
 
       const relatedRowById =
         relatedIdSet.size > 0 && selectedStoreId
@@ -675,7 +737,7 @@ export default function App() {
           for (const rid of relatedIdsOrdered) {
             const rrow = relatedRowById[rid];
             if (!rrow) continue;
-            const childStock = balanceByProduct[rid] ?? 0;
+            const childStock = stockByProduct[rid] ?? 0;
             if (!isCatalogChildRowVisible(rrow, childStock)) continue;
             const childCid =
               rrow.category_id != null && rrow.category_id !== '' ? String(rrow.category_id) : '';
@@ -737,7 +799,7 @@ export default function App() {
             plannedStandardBaseUnit: plannedStd,
             catalogDiscountPct: productDisc,
             onlineDiscountPctAtFetch: onlinePct,
-            stock: balanceByProduct[pid] ?? 0,
+            stock: stockByProduct[pid] ?? 0,
             imageUrl: img,
             images: imageUrls.length > 0 ? imageUrls : undefined,
             manualUrl,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { X, MapPin, Navigation, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
+import { displayAddressFromGeocodeResult } from '../lib/reverseGeocodeGoogle';
 import {
   isGoogleMapsApiKeyConfigured,
   loadGoogleMapsScript,
@@ -91,7 +92,12 @@ export function MapPickerModal({
     gc.geocode({ location: latLng }, (results: any[], status: string) => {
       setIsGeocoding(false);
       if (status === 'OK' && results?.[0]) {
-        setCurrentAddress(results[0].formatted_address);
+        const label = displayAddressFromGeocodeResult(results[0]);
+        setCurrentAddress(
+          label ||
+            results[0].formatted_address?.trim() ||
+            `${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`,
+        );
       } else {
         setCurrentAddress(`${latLng.lat.toFixed(5)}, ${latLng.lng.toFixed(5)}`);
       }

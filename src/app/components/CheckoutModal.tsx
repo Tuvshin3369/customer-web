@@ -15,7 +15,7 @@ import {
 import { MapPickerModal, PickedLocation } from './MapPickerModal';
 import { calculateDistanceKm } from '../utils/haversine';
 import { PaymentInfoCard } from './PaymentInfoCard';
-import { buildCreditTransferNote } from '../lib/creditTransferNote';
+import { buildOnlineTransferNote } from '../lib/creditTransferNote';
 import {
   fetchCustomerProfileByPhone,
   fetchCustomerProfileByGoogleId,
@@ -27,6 +27,10 @@ import {
   cartItemsToOnlineOrderRows,
 } from '../lib/onlineOrdersSubmit';
 import { fetchLastDeliveryLocationFromSales } from '../lib/fetchLastDeliveryLocation';
+import {
+  looksLikeCoordinateAddress,
+  reverseGeocodeLatLng,
+} from '../lib/reverseGeocodeGoogle';
 
 function normalizePhoneDigits(raw: unknown): string | null {
   if (raw == null) return null;
@@ -326,6 +330,19 @@ export function CheckoutModal({
 
   /** Сагсанд хүргэлтийн мөр орсон тул дахин нэмэхгүй */
   const finalTotal = useMemo(() => grandTotal, [grandTotal]);
+
+  /** Гүйлгээний утга — customers.phone → google_id → зочны ecommerce_phone (формын утас) */
+  const onlineTransferIdentifier = useMemo(() => {
+    if (isLoggedIn) {
+      if (customerPhone != null && Number.isFinite(customerPhone) && customerPhone > 0) {
+        return String(customerPhone);
+      }
+      const gid = customerGoogleId?.trim();
+      if (gid) return gid;
+    }
+    const guestPhone = phone.trim();
+    return guestPhone.length > 0 ? guestPhone : undefined;
+  }, [isLoggedIn, customerPhone, customerGoogleId, phone]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -716,8 +733,16 @@ export function CheckoutModal({
     setLocationError('');
     navigator.geolocation.getCurrentPosition(
       ({ coords: { latitude: lat, longitude: lng } }) => {
-        setLocation({ lat, lng, address: `${lat.toFixed(5)}, ${lng.toFixed(5)}` });
-        setIsLocating(false);
+        void (async () => {
+          try {
+            const address = await reverseGeocodeLatLng(lat, lng);
+            setLocation({ lat, lng, address });
+          } catch {
+            setLocation({ lat, lng, address: `${lat.toFixed(5)}, ${lng.toFixed(5)}` });
+          } finally {
+            setIsLocating(false);
+          }
+        })();
       },
       () => {
         setLocationError('Байршил тодорхойлж чадсангүй. Дахин оролдоно уу.');
@@ -729,8 +754,17 @@ export function CheckoutModal({
 
   function handleLastDeliveryLocation() {
     if (!lastDeliveryLocation) return;
-    setLocation(lastDeliveryLocation);
     setLocationError('');
+    const { lat, lng, address } = lastDeliveryLocation;
+    if (looksLikeCoordinateAddress(address)) {
+      setIsLocating(true);
+      void reverseGeocodeLatLng(lat, lng)
+        .then((resolved) => setLocation({ lat, lng, address: resolved }))
+        .catch(() => setLocation(lastDeliveryLocation))
+        .finally(() => setIsLocating(false));
+      return;
+    }
+    setLocation(lastDeliveryLocation);
   }
 
   const lastDeliveryOptionEnabled = isLoggedIn && lastDeliveryLocation != null && !lastDeliveryLoading;
@@ -1264,7 +1298,7 @@ export function CheckoutModal({
                       <div className="flex items-start gap-2.5 bg-green-50 border border-green-200 rounded-xl px-3.5 py-3">
                         <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-semibold text-green-700 mb-0.5">Байршил тохируулагдлаа</p>
+                          <p className="text-xs font-semibold text-green-700 mb-0.5">Байршил сонголоо</p>
                           <p className="text-sm text-green-800 leading-snug">{location.address}</p>
                         </div>
                         <button
@@ -1357,11 +1391,11 @@ export function CheckoutModal({
                   bankName={paymentBankDetails.bankName}
                   accountHolder={paymentBankDetails.accountHolder}
                   accountNumber={paymentBankDetails.accountNumber}
-                  transferNote={buildCreditTransferNote(
+                  transferNote={buildOnlineTransferNote(
                     new Date().toISOString(),
-                    phone || undefined,
+                    onlineTransferIdentifier,
                   )}
-                  showTransferWarning={!phone}
+                  showTransferWarning={!onlineTransferIdentifier}
                 />
 
                 {/* Order summary */}
@@ -1526,8 +1560,14 @@ export function CheckoutModal({
         isOpen={isMapOpen}
         onClose={() => setIsMapOpen(false)}
         onConfirm={(picked: PickedLocation) => {
-          setLocation({ lat: picked.lat, lng: picked.lng, address: picked.address });
-          setLocationError('');
+          void (async () => {
+            let address = picked.address?.trim() ?? '';
+            if (!address || looksLikeCoordinateAddress(address)) {
+              address = await reverseGeocodeLatLng(picked.lat, picked.lng);
+            }
+            setLocation({ lat: picked.lat, lng: picked.lng, address });
+            setLocationError('');
+          })();
         }}
         initialLat={location?.lat ?? null}
         initialLng={location?.lng ?? null}

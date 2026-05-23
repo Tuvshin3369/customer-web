@@ -9,7 +9,7 @@ export function formatTransferNoteDateFromIso(iso: string): string {
   return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())}`;
 }
 
-/** Гүйлгээний утга: «Зээл төлөв -» + YYYY.MM.DD + (утас) */
+/** Гүйлгээний утга: «Зээл төлөв -» + YYYY.MM.DD + (утас) — зөвхөн «Худалдан авалтын түүх» зээл */
 export function buildCreditTransferNote(
   createdAtIso: string,
   phone: string | undefined,
@@ -18,6 +18,17 @@ export function buildCreditTransferNote(
   const ph = phone?.trim() ?? '';
   if (!ymd || !ph) return undefined;
   return `Зээл төлөв -${ymd} -( ${ph} )`;
+}
+
+/** Checkout «Төлбөр» — «Онлайн -» + YYYY.MM.DD + (утас | google_id | ecommerce_phone) */
+export function buildOnlineTransferNote(
+  createdAtIso: string,
+  identifier: string | undefined,
+): string | undefined {
+  const ymd = formatTransferNoteDateFromIso(createdAtIso);
+  const id = identifier?.trim() ?? '';
+  if (!ymd || !id) return undefined;
+  return `Онлайн -${ymd} -( ${id} )`;
 }
 
 /** Checkout — өнөөдрийн YYYY.MM.DD */
