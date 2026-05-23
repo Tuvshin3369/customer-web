@@ -14,7 +14,6 @@ import {
 } from '../utils/codedPaintPricing';
 import type { CustomerLoyaltyContext } from '../lib/customerLoyaltyContext';
 import { applyLoyaltyToProduct, applyFoamCatalogUnitToLoyalty, foamCatalogDiscountPercent } from '../utils/customerPrivilegedPricing';
-import { ProductGallery } from './ProductGallery';
 import { ProductManualSheet } from './ProductManualSheet';
 import { displayStock } from '../utils/displayStock';
 
@@ -186,12 +185,6 @@ export function ProductConfigModal({
 
   const [isManualSheetOpen, setIsManualSheetOpen] = useState(false);
 
-  // ── Gallery state ──────────────────────────────────────────────────────
-  const [isGalleryOpen,  setIsGalleryOpen]  = useState(false);
-  const [galleryIndex,   setGalleryIndex]   = useState(0);
-  // Holds whichever image set is currently open (parent or a child)
-  const [galleryImages,  setGalleryImages]  = useState<string[]>([]);
-
   // ── Child product quantities (isParent products only) ────────────────────
   const [childQtys, setChildQtys] = useState<Record<number, number>>({});
 
@@ -268,7 +261,6 @@ export function ProductConfigModal({
         ? effectiveProduct.images
         : [effectiveProduct.imageUrl])
     : [];
-  const imageTotal = productImages.length;
 
   // ── Animation lifecycle ─────────────────────────────────────────────────
   useEffect(() => {
@@ -284,8 +276,6 @@ export function ProductConfigModal({
       widthTouchedRef.current = false;
       setErrors({}); setTouched({});
       setIsManualSheetOpen(false);
-      setGalleryIndex(0);
-      setGalleryImages([]);
       setChildQtys({});
       setPaintGroupNumber(null);
       setCodeSuggestions([]);
@@ -752,15 +742,9 @@ export function ProductConfigModal({
           {/* ── Product summary strip ──────────────────────────────────── */}
           <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100">
 
-            {/* Tappable image — opens ProductGallery */}
+            {/* Summary thumbnail — галлерей доор гүйлтээр харагдана */}
             <div
-              className="relative w-16 h-16 rounded-xl overflow-hidden bg-gray-100 shrink-0 cursor-pointer active:opacity-80 transition-opacity"
-              onClick={() => {
-                setGalleryImages(productImages);
-                setGalleryIndex(0);
-                setIsGalleryOpen(true);
-              }}
-              aria-label="Зургийг томруулах"
+              className="relative w-16 h-16 rounded-xl overflow-hidden bg-gray-100 shrink-0"
             >
               <ImageWithFallback
                 src={effectiveProduct.imageUrl}
@@ -784,13 +768,6 @@ export function ProductConfigModal({
                     %
                   </span>
                 )}
-
-              {/* Counter badge — only when product has multiple images */}
-              {imageTotal > 1 && (
-                <span className="absolute top-1 right-1 bg-black/60 text-white text-[9px] font-semibold px-1.5 py-0.5 rounded-full leading-none pointer-events-none">
-                  1 / {imageTotal}
-                </span>
-              )}
             </div>
 
             <div className="flex-1 min-w-0">
@@ -1099,10 +1076,9 @@ export function ProductConfigModal({
               )}
             </div>
           </div>
-        </div>
 
-        {/* ── Sticky footer ──────────────────────────────────────────────── */}
-        <div className="shrink-0 border-t border-gray-100 px-5 pt-4 pb-6 bg-white space-y-3.5">
+          {/* ── Нийт үнэ / заавар / child / CTA / зургууд — модал гүйлт дотор ── */}
+          <div className="border-t border-gray-100 px-5 pt-4 pb-6 bg-white space-y-3.5">
 
           {/* Нийт үнэ — Нэгж үнэ is shown in the summary strip above */}
           <div className="flex items-center justify-between">
@@ -1155,18 +1131,7 @@ export function ProductConfigModal({
                     >
                       {/* Thumbnail */}
                       <div
-                        className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0 cursor-pointer active:opacity-75 transition-opacity"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const imgs =
-                            child.images && child.images.length > 0
-                              ? child.images
-                              : [child.imageUrl];
-                          setGalleryImages(imgs);
-                          setGalleryIndex(0);
-                          setIsGalleryOpen(true);
-                        }}
-                        aria-label={`${child.name} зургийг томруулах`}
+                        className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0"
                       >
                         <ImageWithFallback
                           src={child.imageUrl}
@@ -1286,16 +1251,22 @@ export function ProductConfigModal({
             <ShoppingCart className="w-4 h-4" />
             Сагсанд нэмэх
           </button>
+
+          {productImages.length > 0 && (
+            <div className="-mx-5 mt-4 flex flex-col bg-gray-100">
+              {productImages.map((src, i) => (
+                <ImageWithFallback
+                  key={`${src}-${i}`}
+                  src={src}
+                  alt={`${effectiveProduct.name} — ${i + 1}`}
+                  className="w-full h-auto object-contain bg-gray-50 block min-h-[120px]"
+                />
+              ))}
+            </div>
+          )}
+          </div>
         </div>
       </div>
-
-      {/* ── ProductGallery — body portal, z-[220] ── */}
-      <ProductGallery
-        images={galleryImages}
-        initialIndex={galleryIndex}
-        isOpen={isGalleryOpen}
-        onClose={() => setIsGalleryOpen(false)}
-      />
 
       {hasManual && (
         <ProductManualSheet
