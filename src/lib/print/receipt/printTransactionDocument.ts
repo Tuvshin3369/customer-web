@@ -47,7 +47,7 @@ const SALES_PRINT_SELECT = encodeURIComponent(
 );
 
 const ONLINE_ORDER_PRINT_SELECT = encodeURIComponent(
-  'id,store_id,branch_id,product_id,coded_paint_id,product_number,sold_price,system_price,foam_size,length_meter,is_pigment,pigment_product_name,ecommerce_phone,ecommerce_name,ecommerce_register,is_delivery,note,created_at,customer_id,product:products(product_name,is_foam_range,is_calculate_length),coded_paint:coded_paints(color_code,color_name),customer:customers(organization_name,register,phone)'
+  'id,store_id,product_id,coded_paint_id,product_number,sold_price,system_price,foam_size,length_meter,is_pigment,ecommerce_phone,ecommerce_name,ecommerce_register,is_delivery,note,created_at,customer_id,product:products(product_name,is_foam_range,is_calculate_length),coded_paint:coded_paints(color_code,color_name),customer:customers(organization_name,register,phone)'
 );
 
 function getProductDisplayNameSale(item: {
@@ -345,7 +345,6 @@ export async function printOnlineOrdersByIds(orderIds: string[]): Promise<PrintT
 
     const first = rows[0] as {
       store_id: string;
-      branch_id?: string | null;
       created_at: string;
       note: string | null;
       is_delivery?: boolean | null;
@@ -355,9 +354,8 @@ export async function printOnlineOrdersByIds(orderIds: string[]): Promise<PrintT
       customer?: { organization_name: string | null; register: string | null; phone: number };
     };
 
-    const branch = first.branch_id
-      ? await fetchBranchForPrint(String(first.branch_id))
-      : await fetchMainBranchByStoreId(String(first.store_id));
+    /** `online_orders.branch_id` байхгүй — гол салбарыг түр `branches` (store_id + is_main_branch) онооно */
+    const branch = await fetchMainBranchByStoreId(String(first.store_id));
 
     const register =
       first.customer?.register ??
