@@ -7,7 +7,7 @@ import {
   Store, Car, Truck, MessageSquare, Printer, Trash2, X,
   Package, Search, ArrowRight,
 } from 'lucide-react';
-import { OrderPrint, type OrderPrintData } from './print/OrderPrint';
+import { printOnlineOrdersByIds } from '../../lib/print/receipt/printTransactionDocument';
 import {
   fetchOnlineOrdersByEcommercePhone,
   deleteOnlineOrdersByIds,
@@ -320,7 +320,7 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
   const [deleteModal, setDeleteModal] = useState({ open: false, id: '' });
   const [deleting,     setDeleting]   = useState(false);
   const [deleteError,  setDeleteError] = useState<string | null>(null);
-  const [rowPrintData, setRowPrintData] = useState<OrderPrintData | null>(null);
+  const [printError,   setPrintError]  = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -416,14 +416,14 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
     }
   }
 
-  function handlePrintOrder(order: Order) {
-    setRowPrintData({
-      id: order.id,
-      date: order.date,
-      store: order.store,
-      phone: order.phone,
-      products: order.products,
-    });
+  async function handlePrintOrder(order: Order) {
+    if (!order.rowIds.length) {
+      setPrintError('Хэвлэх боломжгүй');
+      return;
+    }
+    setPrintError(null);
+    const result = await printOnlineOrdersByIds(order.rowIds);
+    if (!result.ok) setPrintError(result.message);
   }
 
   if (!mounted) return null;
@@ -579,7 +579,7 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
                         setDeleteError(null);
                         setDeleteModal({ open: true, id: order.id });
                       }}
-                      onPrint={() => handlePrintOrder(order)}
+                      onPrint={() => void handlePrintOrder(order)}
                     />
                   ))}
                 </div>
@@ -605,8 +605,11 @@ export function GuestOrdersPage({ isOpen, onClose }: GuestOrdersPageProps) {
           error={deleteError}
         />
       )}
-      {rowPrintData && (
-        <OrderPrint data={rowPrintData} onClose={() => setRowPrintData(null)} />
+      {printError && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[200] bg-red-600 text-white text-sm px-4 py-2 rounded-lg shadow-lg">
+          {printError}
+          <button type="button" className="ml-3 underline" onClick={() => setPrintError(null)}>Хаах</button>
+        </div>
       )}
     </div>
   );
