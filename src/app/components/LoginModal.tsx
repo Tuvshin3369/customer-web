@@ -24,6 +24,8 @@ interface LoginModalProps {
     phone?: number;
     googleId?: string;
     isWorker?: boolean;
+    /** Утасаар орсон бөгөөд одоогийн нууц нь утасны дигиттэй давхцаж байгаа тохиолдолд. */
+    usesDefaultPhonePassword?: boolean;
   }) => void;
   onForgotClick?: () => void;
 }
@@ -104,11 +106,15 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
     setLoading(true);
     setErrors({});
     try {
-      const { phone: phoneNum, isWorker } = await verifyCustomerLogin(phone, password);
+      const { phone: phoneNum, isWorker, usesDefaultPhonePassword } = await verifyCustomerLogin(
+        phone,
+        password,
+      );
       onLoginSuccess?.({
         phone: phoneNum,
         phoneDisplay: formatCustomerPhoneDisplay(phoneNum),
         isWorker,
+        usesDefaultPhonePassword,
       });
       onClose();
     } catch (err: unknown) {

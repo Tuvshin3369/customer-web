@@ -24,6 +24,8 @@ import { ForgotPasswordModal } from './components/ForgotPasswordModal';
 import { GuestOrdersPage } from './components/GuestOrdersPage';
 import { JobsPage } from './components/JobsPage';
 import { ApplicationPage } from './components/ApplicationPage';
+import { CustomerEmployeeLoginBanner } from './components/CustomerEmployeeLoginBanner';
+import { DefaultPhonePasswordReminderModal } from './components/DefaultPhonePasswordReminderModal';
 import { Product, CartItem, ChildProduct, FoamRangeRow } from './types';
 import {
   filterCatalogChildren,
@@ -47,6 +49,7 @@ import {
   plannedStandardSaleBaseFromRetail,
   repricedProductForLoyalty,
 } from './utils/customerPrivilegedPricing';
+import { PRODUCT_IMAGE_PLACEHOLDER } from './utils/offlineImagePlaceholders';
 
 const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
 
@@ -299,7 +302,7 @@ function mapRowToChildProduct(
       : String(row.product_name ?? '');
   if (!nm) return null;
   const imageUrls = allUrlsFromProductImages(row.product_images);
-  const img = imageUrls[0] || 'https://via.placeholder.com/400x500?text=No+Image';
+  const img = imageUrls[0] || PRODUCT_IMAGE_PLACEHOLDER;
   const retail = numField(row.retail_price, 0);
   const wholesale = numField(row.wholesale_price, 0);
   const bid = row.brand_id != null && row.brand_id !== '' ? String(row.brand_id) : undefined;
@@ -711,7 +714,7 @@ export default function App() {
               ? row.product_name.trim()
               : String(row.product_name ?? '');
           const imageUrls = allUrlsFromProductImages(row.product_images);
-          const img = imageUrls[0] || 'https://via.placeholder.com/400x500?text=No+Image';
+          const img = imageUrls[0] || PRODUCT_IMAGE_PLACEHOLDER;
           const retail = numField(row.retail_price, 0);
           const wholesale = numField(row.wholesale_price, 0);
           const productDisc = numField(row.discount, 0);
@@ -862,6 +865,9 @@ export default function App() {
   /** `customers.is_worker` — зөвхөн true үед «Анкет» цэс */
   const [loggedInUserIsWorker, setLoggedInUserIsWorker] = useState(false);
 
+  const [defaultPwdReminderOpen, setDefaultPwdReminderOpen] = useState(false);
+  const [defaultPwdReminderPhone, setDefaultPwdReminderPhone] = useState<number | null>(null);
+
   /** V1/V2 давуу эрх — REST-ээс бөөндэнэ */
   const [loyaltyCtx, setLoyaltyCtx] = useState<CustomerLoyaltyContext>(EMPTY_CUSTOMER_LOYALTY_CONTEXT);
 
@@ -958,7 +964,11 @@ export default function App() {
     phone?: number;
     googleId?: string;
     isWorker?: boolean;
+    usesDefaultPhonePassword?: boolean;
   }) {
+    setDefaultPwdReminderOpen(false);
+    setDefaultPwdReminderPhone(null);
+
     setIsLoggedIn(true);
     setLoggedInUserIsWorker(ctx?.isWorker === true);
     const t = ctx?.phoneDisplay?.trim() ?? '';
@@ -971,9 +981,13 @@ export default function App() {
     }
     setLoggedInUserGoogleId(null);
     const p = ctx?.phone;
-    setLoggedInUserPhone(
-      p != null && Number.isFinite(p) && Number.isInteger(p) && p > 0 ? p : null,
-    );
+    const phoneOk = p != null && Number.isFinite(p) && Number.isInteger(p) && p > 0;
+    setLoggedInUserPhone(phoneOk ? p : null);
+
+    if (phoneOk && ctx?.usesDefaultPhonePassword === true) {
+      setDefaultPwdReminderPhone(p);
+      queueMicrotask(() => setDefaultPwdReminderOpen(true));
+    }
   }
   function handleLogout() {
     setIsLoggedIn(false);
@@ -982,6 +996,8 @@ export default function App() {
     setLoggedInUserGoogleId(null);
     setLoggedInUserIsWorker(false);
     setLoyaltyCtx(EMPTY_CUSTOMER_LOYALTY_CONTEXT);
+    setDefaultPwdReminderOpen(false);
+    setDefaultPwdReminderPhone(null);
   }
 
   function handleOpenProfile() {
@@ -1272,6 +1288,8 @@ export default function App() {
         </div>
       </div>
 
+      <CustomerEmployeeLoginBanner isLoggedIn={isLoggedIn} />
+
       {/* ── Header — receives store name (headerTitle), not brand name ───── */}
       <Header
         brandName={headerTitle}
@@ -1352,6 +1370,17 @@ export default function App() {
         onLoginSuccess={handleLoginSuccess}
         onForgotClick={() => setIsForgotPasswordOpen(true)}
       />
+      {defaultPwdReminderPhone != null && (
+        <DefaultPhonePasswordReminderModal
+          isOpen={defaultPwdReminderOpen}
+          customerPhone={defaultPwdReminderPhone}
+          onLater={() => setDefaultPwdReminderOpen(false)}
+          onPasswordChanged={() => {
+            setDefaultPwdReminderOpen(false);
+            setDefaultPwdReminderPhone(null);
+          }}
+        />
+      )}
       <RegisterModal
         isOpen={isRegisterModalOpen}
         onClose={() => setIsRegisterModalOpen(false)}

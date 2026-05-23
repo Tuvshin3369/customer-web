@@ -1,5 +1,6 @@
 import type { CartItem, Product } from '../types';
 import { calculateTotal } from '../utils/priceCalc';
+import { DELIVERY_IMAGE_PLACEHOLDER } from '../utils/offlineImagePlaceholders';
 
 export const DELIVERY_SERVICE_CART_ITEM_ID = '__delivery_service__';
 
@@ -61,7 +62,7 @@ export function parseDeliveryServiceProductRow(
       : String(row.product_name ?? '');
   if (!nm) return null;
   const urls = urlsFromProductImages(row.product_images);
-  const img = urls[0] || 'https://via.placeholder.com/400x500?text=Delivery';
+  const img = urls[0] || DELIVERY_IMAGE_PLACEHOLDER;
   const retail = numField(row.retail_price, 0);
   return {
     id: pid,

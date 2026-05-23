@@ -276,11 +276,64 @@ export async function registerCustomerWithGoogleId(
   }
 }
 
+/**
+ * Нэвтрэхийн үед оруулсан нууц утасны дигитийн хэлбэртэй давтагдана эсэх —
+ * ажилтан анх утасны дугаарыг нууц болгож bcrypt хийдэг тохиолдолд.
+ */
+export function loginPasswordMatchesStoredPhoneCredential(
+  loginPassword: string,
+  phoneDb: number,
+): boolean {
+  const pw = loginPassword.replace(/\D/g, '');
+  const ph = String(phoneDb).replace(/\D/g, '');
+  if (pw.length < 6 || ph.length < 6) return false;
+
+  const normalize = (digits: string, other: string) => {
+    let x = digits;
+    if (x.startsWith('976')) x = x.slice(3);
+    const otherNo976 = other.startsWith('976') ? other.slice(3) : other;
+    while (x.startsWith('0') && x.length > otherNo976.replace(/^0+/, '').length) {
+      x = x.slice(1);
+    }
+    return x.replace(/^0+/, '') || '0';
+  };
+
+  const pwC = normalize(pw, ph);
+  const phC = normalize(ph, pw);
+  if (pwC === phC) return true;
+  if (pwC.length >= 8 && phC.length >= 8 && pwC.slice(-8) === phC.slice(-8)) return true;
+  if (pwC.endsWith(phC) && phC.length >= 8) return true;
+  if (phC.endsWith(pwC) && pwC.length >= 8) return true;
+  return false;
+}
+
+/** Хуучин нууц үгийн зөв эсэхийг bcrypt-ээр шалгана. */
+export async function verifyCustomerPasswordForPhone(
+  phone: number,
+  password: string,
+): Promise<boolean> {
+  const { restBase, anonKey } = getSupabaseRest();
+  const q = new URLSearchParams({
+    select: 'password_hash',
+    phone: `eq.${phone}`,
+    limit: '1',
+  });
+  const res = await fetch(`${restBase}/rest/v1/customers?${q.toString()}`, {
+    headers: restHeaders(anonKey),
+  });
+  const json = await parseJsonSafely(res);
+  if (!res.ok || !Array.isArray(json) || json.length === 0) return false;
+  const hash = (json[0] as { password_hash?: string | null }).password_hash;
+  if (!hash || typeof hash !== 'string') return false;
+  const { default: bcrypt } = await import('bcryptjs');
+  return bcrypt.compare(password, hash);
+}
+
 /** Утас + нууц үгээр нэвтрэх — password_hash-ийг bcrypt.compare-оор шалгана. */
 export async function verifyCustomerLogin(
   phoneInput: string,
   password: string,
-): Promise<{ phone: number; isWorker: boolean }> {
+): Promise<{ phone: number; isWorker: boolean; usesDefaultPhonePassword: boolean }> {
   const { restBase, anonKey } = getSupabaseRest();
   const phoneNum = phoneToInt64(phoneInput);
   if (Number.isNaN(phoneNum)) {
@@ -315,7 +368,9 @@ export async function verifyCustomerLogin(
   if (!ok) {
     throw new Error('Утасны дугаар эсвэл нууц үг буруу байна.');
   }
-  return { phone: row.phone ?? phoneNum, isWorker: row.is_worker === true };
+  const resolvedPhone = row.phone ?? phoneNum;
+  const usesDefaultPhonePassword = loginPasswordMatchesStoredPhoneCredential(password, resolvedPhone);
+  return { phone: resolvedPhone, isWorker: row.is_worker === true, usesDefaultPhonePassword };
 }
 
 export function formatCustomerPhoneDisplay(phone: number): string {
