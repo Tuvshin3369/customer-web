@@ -5,7 +5,7 @@ import { Check, ShoppingCart } from 'lucide-react';
 import { Header } from './components/Header';
 import { SearchBar } from './components/SearchBar';
 import { BrandFilter } from './components/BrandFilter';
-import { CategoryTabs } from './components/CategoryTabs';
+import { CategoryTabs, SALE_CATEGORY_TAB } from './components/CategoryTabs';
 import { ProductGrid } from './components/ProductGrid';
 import { BottomNavigation } from './components/BottomNavigation';
 import { BranchModal } from './components/BranchModal';
@@ -37,6 +37,7 @@ import {
   canGetRawMaterialsForBrand,
   EMPTY_CUSTOMER_LOYALTY_CONTEXT,
   fetchCustomerLoyaltyContext,
+  productShowsSaleOnCard,
   type CustomerLoyaltyContext,
 } from './lib/customerLoyaltyContext';
 import {
@@ -1194,8 +1195,13 @@ export default function App() {
     if (selectedCategory === 'Бүх бараа') {
       return [...productsLabeled].sort(byCategoryThenDisplay);
     }
+    if (selectedCategory === SALE_CATEGORY_TAB) {
+      return [...productsLabeled.filter((p) =>
+        productShowsSaleOnCard(p, { isLoggedIn, loyaltyContext: loyaltyCtx }),
+      )].sort(byCategoryThenDisplay);
+    }
     return [...productsLabeled.filter((p) => p.category === selectedCategory)].sort(byDisplayOnly);
-  }, [productsLabeled, selectedCategory, categorySequenceById]);
+  }, [productsLabeled, selectedCategory, categorySequenceById, isLoggedIn, loyaltyCtx]);
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) return currentProducts;

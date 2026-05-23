@@ -1,3 +1,5 @@
+export const SALE_CATEGORY_TAB = 'SALE';
+
 interface CategoryTabsProps {
   categories: string[];
   activeCategory: string;
@@ -5,7 +7,7 @@ interface CategoryTabsProps {
 }
 
 export function CategoryTabs({ categories, activeCategory, onCategoryChange }: CategoryTabsProps) {
-  const allCategories = ['Бүх бараа', ...categories];
+  const allCategories = ['Бүх бараа', SALE_CATEGORY_TAB, ...categories];
 
   return (
     <div className="bg-white border-b border-gray-200">

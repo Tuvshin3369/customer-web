@@ -315,3 +315,29 @@ export function productCardDiscountPercent(
   }
   return p.discount ?? 0;
 }
+
+/** Каталогийн карт дээр SALE (-%) тэмдэг харагдах эсэх */
+export function productShowsSaleOnCard(
+  product: Product,
+  opts?: {
+    isLoggedIn?: boolean;
+    loyaltyContext?: CustomerLoyaltyContext | null;
+  },
+): boolean {
+  const { isLoggedIn = false, loyaltyContext = null } = opts ?? {};
+
+  if (isLoggedIn && loyaltyContext && product.is_foam_range === true) {
+    const foamPct = loyaltyPreviewPercentForProductBrand(product.brandId, loyaltyContext);
+    if (foamPct != null && foamPct > 0) {
+      const catalogListUnit =
+        product.retailPrice != null && product.retailPrice > 0
+          ? product.retailPrice
+          : product.price > 0
+            ? product.price
+            : 0;
+      if (catalogListUnit > 0) return true;
+    }
+  }
+
+  return productCardDiscountPercent(product) > 0;
+}
