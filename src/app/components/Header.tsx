@@ -15,7 +15,7 @@ interface HeaderProps {
   /** Hamburger: дэлгүүрүүд (үсгийн дарааллаар) */
   storePickerItems:      StorePickerItem[];
   selectedStoreId:       string | null;
-  onStoreSelect:         (id: string) => void;
+  onStoreSelect:         (id: string) => boolean;
   /** Сонгосон дэлгүүрийн stores.facebook_messenger_url */
   messengerUrl:          string | null;
   onHomeClick?:          () => void;
@@ -163,8 +163,8 @@ export function Header({
   }
 
   function handlePickStore(id: string) {
-    onStoreSelect(id);
-    closeStorePicker();
+    const applied = onStoreSelect(id);
+    if (applied) closeStorePicker();
   }
 
   // ── Cross-fade when store name changes ────────────────────────────────────

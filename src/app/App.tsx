@@ -398,7 +398,6 @@ export default function App() {
 
   // ── Cart store lock — сагсанд бараа байхад өөр дэлгүүр сонгохыг хориглоно ──
   const [activeCartStoreId, setActiveCartStoreId] = useState<string | null>(null);
-  const [lockedStoreDisplayName, setLockedStoreDisplayName] = useState<string | null>(null);
   // Toast shown when user tries to switch to a locked-out store
   const [showLockedToast, setShowLockedToast] = useState(false);
 
@@ -510,10 +509,10 @@ export default function App() {
     fetchStores();
   }, []);
 
-  function handleStoreSelect(id: string) {
+  function handleStoreSelect(id: string): boolean {
     if (cartItems.length > 0 && activeCartStoreId != null && id !== activeCartStoreId) {
       fireLockedToast();
-      return;
+      return false;
     }
     setSelectedStoreId(id);
     try {
@@ -521,6 +520,7 @@ export default function App() {
     } catch {
       /* ignore */
     }
+    return true;
   }
 
   const fetchBrandsForStore = useCallback(async (storeId: string | null) => {
@@ -846,7 +846,6 @@ export default function App() {
   useEffect(() => {
     if (cartItems.length === 0) {
       setActiveCartStoreId(null);
-      setLockedStoreDisplayName(null);
     }
   }, [cartItems.length]);
 
@@ -1079,7 +1078,6 @@ export default function App() {
     );
     setCartItems([]);
     setActiveCartStoreId(null);
-    setLockedStoreDisplayName(null);
     if (hadService) setDeliveryUiCancelNonce((n) => n + 1);
     setIsCartOpen(false);
   }, [cartItems]);
@@ -1087,19 +1085,15 @@ export default function App() {
   function handleConfigureProduct(product: Product) { setConfigProduct(product); }
 
   function handleAddConfiguredItem(item: CartItem) {
-    if (cartItems.length === 0) {
-      if (selectedStoreId) setActiveCartStoreId(selectedStoreId);
-      const nm = stores.find((s) => s.id === selectedStoreId)?.name?.trim();
-      if (nm) setLockedStoreDisplayName(nm);
+    if (cartItems.length === 0 && selectedStoreId) {
+      setActiveCartStoreId(selectedStoreId);
     }
     setCartItems((prev) => [...prev, item]);
   }
 
   function handleAddChildItems(items: CartItem[]) {
-    if (cartItems.length === 0 && items.length > 0) {
-      if (selectedStoreId) setActiveCartStoreId(selectedStoreId);
-      const nm = stores.find((s) => s.id === selectedStoreId)?.name?.trim();
-      if (nm) setLockedStoreDisplayName(nm);
+    if (cartItems.length === 0 && items.length > 0 && selectedStoreId) {
+      setActiveCartStoreId(selectedStoreId);
     }
     setCartItems((prev) => [...prev, ...items]);
   }
@@ -1122,7 +1116,6 @@ export default function App() {
       const next = prev.filter((item) => item.cartItemId !== cartItemId);
       if (next.length === 0) {
         setActiveCartStoreId(null);
-        setLockedStoreDisplayName(null);
       }
       if (isService) {
         queueMicrotask(() => setDeliveryUiCancelNonce((n) => n + 1));
@@ -1284,7 +1277,7 @@ export default function App() {
       >
         <div className="flex items-center gap-2 bg-gray-900/92 text-white text-xs px-4 py-2.5 rounded-full shadow-lg backdrop-blur-sm">
           <ShoppingCart className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-          Эхлээд сагсаа хоослоно уу
+          Эхлээд сагсаа хоосолно уү
         </div>
       </div>
 
@@ -1327,8 +1320,6 @@ export default function App() {
         brands={brandChipOptions}
         activeBrandId={selectedBrandId || null}
         onBrandChange={handleBrandChange}
-        lockedStore={cartItems.length > 0 ? lockedStoreDisplayName : null}
-        onBlockedClick={fireLockedToast}
       />
       <CategoryTabs
         categories={categoryNames}

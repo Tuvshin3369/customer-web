@@ -116,9 +116,14 @@ export function CustomerEmployeeLoginBanner({ isLoggedIn }: CustomerEmployeeLogi
             id="customer-login-hint-body"
             className="text-[14px] md:text-[15px] leading-relaxed text-gray-800 font-medium"
           >
-            Та өмнө нь худалдан авалт хийж байсан мөн өөрөө бүртгүүлээгүй бол таны нэвтрэх нэр ба
-            нууц үг = таны бүртгүүлсэн утасны дугаар байна. Та нэвтэрч орсоноор өмнөх түүхээ харах
-            боломжтой.
+            Та өмнө нь худалдан авалт хийж байсан мөн өөрөө бүртгүүлээгүй бол таны{' '}
+            <span className="text-red-600 font-semibold">нэвтрэх нэр</span>
+            {' '}ба{' '}
+            <span className="text-red-600 font-semibold">нууц үг</span>
+            {' '}= таны бүртгүүлсэн{' '}
+            <span className="text-red-600 font-semibold">утасны дугаар</span>
+            {' '}
+            байна. Та нэвтэрч орсоноор өмнөх түүхээ харах боломжтой.
           </p>
         </div>
       </div>
