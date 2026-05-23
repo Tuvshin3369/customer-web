@@ -7,10 +7,11 @@ import {
   MessageSquare, Printer, X, Package2,
   Search, CalendarDays, FileSpreadsheet, CreditCard,
 } from 'lucide-react';
-import { PurchaseHistoryPrint }            from './print/PurchaseHistoryPrint';
-import { buildGroupedPurchaseData }        from '../../lib/print/buildPurchaseData';
-import type { GroupedPrintData }           from '../../lib/print/buildPurchaseData';
 import { PaymentInfoCard } from './PaymentInfoCard';
+import { PurchaseHistoryPrint } from './print/PurchaseHistoryPrint';
+import { buildGroupedPurchaseData } from '../../lib/print/buildPurchaseData';
+import type { GroupedPrintData } from '../../lib/print/buildPurchaseData';
+import { printSalesBySalesIds } from '../../lib/print/receipt/printTransactionDocument';
 import {
   fetchCustomerProfileByPhone,
   fetchCustomerProfileByGoogleId,
@@ -37,6 +38,7 @@ interface HistoryItem {
   products:     HistoryProduct[];
   bankInfo?:      PurchaseSaleBankInfo;
   transferNote?:  string;
+  salesRowIds:  string[];
 }
 
 
@@ -82,6 +84,7 @@ function groupedSaleToHistoryItem(row: PurchaseHistoryGroupedSale): HistoryItem 
     products: row.products,
     bankInfo: row.bankInfo,
     transferNote: row.transferNote,
+    salesRowIds: row.salesRowIds,
   };
 }
 
@@ -804,6 +807,7 @@ export function PurchaseHistoryPage({
   const [noteModal,        setNoteModal]        = useState({ open: false, note: '' });
   const [isExporting,      setIsExporting]      = useState(false);
   const [printData,        setPrintData]        = useState<GroupedPrintData | null>(null);
+  const [printError,       setPrintError]       = useState<string | null>(null);
   const [fetched,          setFetched]          = useState<HistoryItem[]>([]);
   const [fetchLoading,     setFetchLoading]     = useState(false);
   const [fetchErr,        setFetchErr]         = useState<string | null>(null);
@@ -924,8 +928,10 @@ export function PurchaseHistoryPage({
     }
   }
 
-  /** Header "Хэвлэх" — grouped PurchaseHistoryPrint */
+  /** Header «Хэвлэх» — шүүсэн бүх борлуулалтыг нэгдмэл A4 баримтаар */
   async function handlePrintAll() {
+    if (displayed.length === 0) return;
+
     let customerOrganizationName = '';
     let customerPhoneLine = '';
 
@@ -956,35 +962,14 @@ export function PurchaseHistoryPage({
     });
   }
 
-  /** Row printer icon → opens /sales-history-print.html in a popup window,
-   *  passes the selected sale record to SalesHistoryPrint(), then prints. */
-  function handleRowPrint(item: HistoryItem) {
-    const data = {
-      docNumber : item.id,
-      date      : fmtDate(item.date),
-      store     : item.store,
-      phone     : item.phone,
-      cashier   : '',
-      products  : item.products.map(p => ({
-        name: p.name, quantity: p.quantity, price: p.price,
-      })),
-      note: item.note || '',
-    };
-
-    const win = window.open(
-      '/sales-history-print.html',
-      '_blank',
-      'width=700,height=960,menubar=no,toolbar=no,location=no,scrollbars=yes',
-    );
-    if (!win) return;
-
-    win.addEventListener('load', () => {
-      if (typeof (win as any).SalesHistoryPrint === 'function') {
-        (win as any).SalesHistoryPrint(data);
-      }
-      // Brief delay so the DOM settles before the print dialog opens
-      setTimeout(() => win.print(), 150);
-    });
+  async function handleRowPrint(item: HistoryItem) {
+    if (!item.salesRowIds?.length) {
+      setPrintError('Хэвлэх боломжгүй');
+      return;
+    }
+    setPrintError(null);
+    const result = await printSalesBySalesIds(item.salesRowIds);
+    if (!result.ok) setPrintError(result.message);
   }
 
   // ── Slide-in / slide-out ──────────────────────────────────────────────────
@@ -1096,15 +1081,14 @@ export function PurchaseHistoryPage({
             Худалдан авалтын түүх
           </h1>
 
-          {/* Header print button — grouped PurchaseHistoryPrint */}
           <button
             onClick={handlePrintAll}
             disabled={displayed.length === 0}
             aria-label="Бүгдийг хэвлэх"
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
-                       border border-gray-200 bg-white text-sm text-gray-600
-                       hover:bg-gray-50 hover:border-gray-300 active:bg-gray-100
-                       transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-lg
+                       border border-gray-200 text-sm text-gray-700
+                       hover:bg-gray-50 active:bg-gray-100 transition-colors
+                       disabled:opacity-40 disabled:pointer-events-none"
           >
             <Printer className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Хэвлэх</span>
@@ -1251,15 +1235,19 @@ export function PurchaseHistoryPage({
         <NoteModal note={noteModal.note} onClose={() => setNoteModal({ open: false, note: '' })} />
       )}
 
-      {/* ── Header print portal (PurchaseHistoryPrint — grouped) ─────────────── */}
+      {printError && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[200] bg-red-600 text-white text-sm px-4 py-2 rounded-lg shadow-lg">
+          {printError}
+          <button type="button" className="ml-3 underline" onClick={() => setPrintError(null)}>Хаах</button>
+        </div>
+      )}
+
       {printData && (
         <PurchaseHistoryPrint
           data={printData}
           onClose={() => setPrintData(null)}
         />
       )}
-
-      {/* row-level print handled by handleRowPrint() → /sales-history-print.html */}
     </div>
   );
 }

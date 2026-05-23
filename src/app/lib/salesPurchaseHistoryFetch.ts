@@ -48,6 +48,8 @@ export interface PurchaseHistoryGroupedSale {
   transferNote?: string;
   /** Борлуулалтын created_at (ISO) */
   createdAtIso: string;
+  /** Хэвлэх — sales.sales_id (PK) жагсаалт */
+  salesRowIds: string[];
 }
 
 interface SupabaseEnv {
@@ -954,6 +956,12 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
       displayId = `SAL-${h}`;
     }
 
+    const salesRowIds: string[] = [];
+    for (const r of arr) {
+      const sid = pickSaleRowId(r);
+      if (sid && !salesRowIds.includes(sid)) salesRowIds.push(sid);
+    }
+
     result.push({
       id: displayId,
       date: formatDisplayDate(created),
@@ -966,6 +974,7 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
       bankInfo,
       transferNote,
       createdAtIso: created,
+      salesRowIds,
     });
   }
 
