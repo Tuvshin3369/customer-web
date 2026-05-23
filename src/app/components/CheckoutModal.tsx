@@ -3,7 +3,7 @@ import {
   X, Phone, Building2, FileText, Hash, Map,
   MapPin, Navigation, Truck, CheckCircle2, AlertCircle,
   Loader2, RefreshCw, Store, Gift, ChevronLeft, ChevronDown,
-  Copy, Check,
+  Copy, Check, History,
 } from 'lucide-react';
 import type { CartItem, Product } from '../types';
 import {
@@ -26,6 +26,7 @@ import {
   bulkInsertOnlineOrders,
   cartItemsToOnlineOrderRows,
 } from '../lib/onlineOrdersSubmit';
+import { fetchLastDeliveryLocationFromSales } from '../lib/fetchLastDeliveryLocation';
 
 function normalizePhoneDigits(raw: unknown): string | null {
   if (raw == null) return null;
@@ -230,6 +231,8 @@ export function CheckoutModal({
   const [isLocating,    setIsLocating]    = useState(false);
   const [locationError, setLocationError] = useState('');
   const [isMapOpen,     setIsMapOpen]     = useState(false);
+  const [lastDeliveryLocation, setLastDeliveryLocation] = useState<GeoLocation | null>(null);
+  const [lastDeliveryLoading, setLastDeliveryLoading] = useState(false);
 
   // ── Step 3 — ТӨЛБӨР ──────────────────────────────────────────────────────
   // (no paymentMethod state needed anymore)
@@ -657,6 +660,34 @@ export function CheckoutModal({
     };
   }, [isOpen]);
 
+  /** Нэвтэрсэн харилцагчийн сүүлийн хүргэлтийн байршил (`sales`) */
+  useEffect(() => {
+    if (!isOpen || !isLoggedIn) {
+      setLastDeliveryLocation(null);
+      setLastDeliveryLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLastDeliveryLoading(true);
+    void fetchLastDeliveryLocationFromSales({
+      isLoggedIn: true,
+      phone: customerPhone,
+      googleId: customerGoogleId,
+    })
+      .then((loc) => {
+        if (!cancelled) setLastDeliveryLocation(loc);
+      })
+      .catch(() => {
+        if (!cancelled) setLastDeliveryLocation(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLastDeliveryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, isLoggedIn, customerPhone, customerGoogleId]);
+
   // ── Validation helpers ─────────────────────────────────────────────────
   function validatePhone(val: string) {
     if (!val.trim()) return 'Утасны дугаар оруулна уу.';
@@ -695,6 +726,14 @@ export function CheckoutModal({
       { timeout: 10_000 },
     );
   }
+
+  function handleLastDeliveryLocation() {
+    if (!lastDeliveryLocation) return;
+    setLocation(lastDeliveryLocation);
+    setLocationError('');
+  }
+
+  const lastDeliveryOptionEnabled = isLoggedIn && lastDeliveryLocation != null && !lastDeliveryLoading;
 
   const deliveryOptionEnabled = !isLoadingStore && isStoreDeliveryEnabled(store);
 
@@ -1172,26 +1211,54 @@ export function CheckoutModal({
                   <div className="space-y-2.5">
                     <p className="text-xs font-medium text-gray-600">Хүргэлтийн байршил</p>
 
-                    <button
-                      type="button"
-                      onClick={handleGeolocate}
-                      disabled={isLocating}
-                      className="flex items-center gap-2 w-full border border-blue-200 bg-blue-50 hover:bg-blue-100 active:opacity-70 rounded-xl px-3.5 py-2.5 transition-colors disabled:opacity-50"
-                    >
-                      <Navigation className={`w-4 h-4 text-blue-600 shrink-0 ${isLocating ? 'animate-pulse' : ''}`} />
-                      <span className="text-sm font-medium text-blue-700">
-                        {isLocating ? 'Байршил тодорхойлж байна…' : 'Миний байршил'}
-                      </span>
-                    </button>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIsMapOpen(true)}
+                        className="flex items-center justify-center gap-1.5 w-full border border-gray-200 bg-gray-50 hover:bg-gray-100 active:opacity-70 rounded-xl px-2.5 py-2.5 transition-colors"
+                      >
+                        <Map className="w-4 h-4 text-gray-500 shrink-0" />
+                        <span className="text-xs text-gray-700 font-medium text-center leading-tight">
+                          Google map
+                        </span>
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setIsMapOpen(true)}
-                      className="flex items-center gap-2 w-full border border-gray-200 bg-gray-50 hover:bg-gray-100 active:opacity-70 rounded-xl px-3.5 py-2.5 transition-colors"
-                    >
-                      <Map className="w-4 h-4 text-gray-500 shrink-0" />
-                      <span className="text-sm text-gray-700 font-medium">Газрын зургаас сонгох</span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={handleGeolocate}
+                        disabled={isLocating}
+                        className="flex items-center justify-center gap-1.5 w-full border border-blue-200 bg-blue-50 hover:bg-blue-100 active:opacity-70 rounded-xl px-2.5 py-2.5 transition-colors disabled:opacity-50"
+                      >
+                        <Navigation className={`w-4 h-4 text-blue-600 shrink-0 ${isLocating ? 'animate-pulse' : ''}`} />
+                        <span className="text-xs font-medium text-blue-700 text-center leading-tight">
+                          {isLocating ? 'Тодорхойлж…' : 'Миний байршил'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleLastDeliveryLocation}
+                        disabled={!lastDeliveryOptionEnabled || isLocating}
+                        className={`flex items-center justify-center gap-1.5 w-full border rounded-xl px-2.5 py-2.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                          lastDeliveryOptionEnabled
+                            ? 'border-violet-200 bg-violet-50 hover:bg-violet-100 active:opacity-70'
+                            : 'border-gray-200 bg-gray-50'
+                        }`}
+                      >
+                        {lastDeliveryLoading ? (
+                          <Loader2 className="w-4 h-4 text-gray-400 shrink-0 animate-spin" />
+                        ) : (
+                          <History className={`w-4 h-4 shrink-0 ${lastDeliveryOptionEnabled ? 'text-violet-600' : 'text-gray-300'}`} />
+                        )}
+                        <span
+                          className={`text-xs font-medium text-center leading-tight ${
+                            lastDeliveryOptionEnabled ? 'text-violet-700' : 'text-gray-400'
+                          }`}
+                        >
+                          {lastDeliveryLoading ? 'Шалгаж…' : 'Сүүлд хүргэсэн байршил'}
+                        </span>
+                      </button>
+                    </div>
 
                     {location ? (
                       <div className="flex items-start gap-2.5 bg-green-50 border border-green-200 rounded-xl px-3.5 py-3">
