@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import {
   X, Phone, Building2, FileText, Hash, Map,
   MapPin, Navigation, Truck, CheckCircle2, AlertCircle,
-  Loader2, RefreshCw, Store, Gift, ChevronLeft, ChevronDown,
+  Loader2, RefreshCw, Store, ChevronLeft, ChevronDown,
   Copy, Check, History,
 } from 'lucide-react';
 import type { CartItem, Product } from '../types';
@@ -1396,52 +1396,10 @@ export function CheckoutModal({
                     onlineTransferIdentifier,
                   )}
                   showTransferWarning={!onlineTransferIdentifier}
+                  totalAmount={finalTotal}
+                  onCopyTotal={handleCopyTotal}
+                  copiedTotal={copiedTotal}
                 />
-
-                {/* Order summary */}
-                <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-2.5">
-                  <p className="text-xs font-semibold text-gray-700">Захиалгын дүн</p>
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-sm text-gray-500">
-                      <span>Бараа</span>
-                      <span>₮{merchandiseTotal.toLocaleString()}</span>
-                    </div>
-                    {deliveryType === 'delivery' && (
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">Хүргэлтийн хөлс</span>
-                        {isFreeDelivery ? (
-                          <span className="inline-flex items-center gap-1 text-green-600 font-semibold">
-                            <Gift className="w-3.5 h-3.5" /> Үнэгүй
-                          </span>
-                        ) : location && mainBranchRoute && store ? (
-                          <span className="text-gray-900 font-semibold">₮{totalDeliveryCharge.toLocaleString()}</span>
-                        ) : (
-                          <span className="text-gray-400 text-xs italic">байршил хүлээж байна</span>
-                        )}
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between pt-2 border-t border-gray-200">
-                      <span className="text-sm font-semibold text-gray-700">Нийт</span>
-                      <div className="flex items-center gap-1">
-                        <span className="text-xl font-bold text-gray-900">₮{finalTotal.toLocaleString()}</span>
-                        <button
-                          type="button"
-                          onClick={handleCopyTotal}
-                          title="Нийт дүн хуулах"
-                          aria-label="Нийт дүн хуулах"
-                          className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg
-                                     bg-transparent hover:bg-gray-200 active:bg-gray-300
-                                     text-gray-400 hover:text-gray-700 transition-colors"
-                        >
-                          {copiedTotal
-                            ? <Check className="w-3.5 h-3.5 text-green-500" />
-                            : <Copy  className="w-3.5 h-3.5" />
-                          }
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
               </div>
             )}
           </div>

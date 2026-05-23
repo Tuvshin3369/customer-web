@@ -8,6 +8,10 @@ interface PaymentInfoCardProps {
   accountNumber:        string;
   transferNote?:        string;   // "Гүйлгээний утга" value; omit/undefined → shows '—'
   showTransferWarning?: boolean;  // amber alert "утас оруулаагүй" banner
+  /** Checkout «Төлбөр» — картын доод «Нийт» мөр */
+  totalAmount?:         number;
+  onCopyTotal?:         () => void;
+  copiedTotal?:         boolean;
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -17,6 +21,9 @@ export function PaymentInfoCard({
   accountNumber,
   transferNote,
   showTransferWarning = false,
+  totalAmount,
+  onCopyTotal,
+  copiedTotal = false,
 }: PaymentInfoCardProps) {
   const [copiedField, setCopiedField] = useState<'account' | 'transfer' | null>(null);
 
@@ -122,6 +129,31 @@ export function PaymentInfoCard({
           <AlertCircle className="w-3 h-3 shrink-0" />
           Утасны дугаараа оруулсны дараа гүйлгээний утга харагдана
         </p>
+      )}
+
+      {totalAmount != null && Number.isFinite(totalAmount) && (
+        <div className="flex items-center justify-between pt-2 border-t border-gray-200">
+          <span className="text-sm font-semibold text-gray-700">Нийт</span>
+          <div className="flex items-center gap-1">
+            <span className="text-xl font-bold text-gray-900">₮{totalAmount.toLocaleString()}</span>
+            {onCopyTotal ? (
+              <button
+                type="button"
+                onClick={onCopyTotal}
+                title="Нийт дүн хуулах"
+                aria-label="Нийт дүн хуулах"
+                className="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg
+                           bg-transparent hover:bg-gray-200 active:bg-gray-300
+                           text-gray-400 hover:text-gray-700 transition-colors"
+              >
+                {copiedTotal
+                  ? <Check className="w-3.5 h-3.5 text-green-500" />
+                  : <Copy  className="w-3.5 h-3.5" />
+                }
+              </button>
+            ) : null}
+          </div>
+        </div>
       )}
     </div>
   );
