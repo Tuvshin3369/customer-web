@@ -358,6 +358,7 @@ export function ProductGallery({
                     alt={`Зураг ${i + 1}`}
                     className="absolute inset-0 w-full h-full object-contain select-none"
                     loading={isActive ? 'eager' : 'lazy'}
+                    decoding="async"
                     draggable={false}
                     /*
                      * FUTURE: ZOOM — wrap this component with a pinch-gesture
@@ -457,6 +458,7 @@ export function ProductGallery({
                   alt={`Дүрс ${i + 1}`}
                   className="w-full h-full object-cover"
                   loading="lazy"
+                  decoding="async"
                   draggable={false}
                 />
               </button>

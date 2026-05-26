@@ -7,6 +7,7 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 import { configLabel, calculateTotal, getBasePrice } from '../utils/priceCalc';
 import { foamCatalogDiscountPercent } from '../utils/customerPrivilegedPricing';
 import { ProductGallery } from './ProductGallery';
+import { productListImageProps } from '../utils/productThumbnailUrl';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -353,9 +354,11 @@ function CartItemCard({
           aria-label={`${item.product.name} зургийг томруулах`}
         >
           <ImageWithFallback
-            src={item.product.imageUrl}
+            {...productListImageProps(item.product.imageUrl, item.product.thumbnailUrl)}
             alt={item.product.name}
             className="w-full h-full object-cover"
+            loading="lazy"
+            decoding="async"
           />
         </div>
 

@@ -12,6 +12,10 @@ ALTER TABLE public.customers
 ALTER TABLE public.customers
   ALTER COLUMN password_hash DROP NOT NULL;
 
+-- Google profile нэр (admin «Харилцагчийн төлөв» жагсаалтад харуулна)
+ALTER TABLE public.customers
+  ADD COLUMN IF NOT EXISTS google_name varchar(100) DEFAULT NULL;
+
 -- Дор хаяж нэг нэвтрэх арга: утас эсвэл google_id
 DO $$
 BEGIN

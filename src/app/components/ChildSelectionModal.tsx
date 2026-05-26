@@ -3,6 +3,7 @@ import { X, Plus, Minus, ShoppingCart, Layers } from 'lucide-react';
 import { Product, ChildProduct, CartItem } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { displayStock } from '../utils/displayStock';
+import { productListImageProps } from '../utils/productThumbnailUrl';
 
 interface ChildSelectionModalProps {
   parentProduct: Product | null;
@@ -110,6 +111,7 @@ export function ChildSelectionModal({
             loyaltyReportRetailDiscountPct: c.loyaltyReportRetailDiscountPct,
             stock: c.stock,
             imageUrl: c.imageUrl,
+            ...(c.thumbnailUrl ? { thumbnailUrl: c.thumbnailUrl } : {}),
             images: c.images,
             productType: 1,
             receivedPrice: c.receivedPrice,
@@ -240,9 +242,11 @@ function ChildRow({ child, quantity, onDecrement, onIncrement }: ChildRowProps) 
         {/* Image */}
         <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 shrink-0">
           <ImageWithFallback
-            src={child.imageUrl}
+            {...productListImageProps(child.imageUrl, child.thumbnailUrl)}
             alt={child.name}
             className="w-full h-full object-cover"
+            loading="lazy"
+            decoding="async"
           />
         </div>
 

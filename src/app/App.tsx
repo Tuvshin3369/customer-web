@@ -50,6 +50,7 @@ import {
   repricedProductForLoyalty,
 } from './utils/customerPrivilegedPricing';
 import { PRODUCT_IMAGE_PLACEHOLDER } from './utils/offlineImagePlaceholders';
+import { productThumbnailUrlForPrimary } from './utils/productThumbnailUrl';
 
 const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
 
@@ -303,6 +304,7 @@ function mapRowToChildProduct(
   if (!nm) return null;
   const imageUrls = allUrlsFromProductImages(row.product_images);
   const img = imageUrls[0] || PRODUCT_IMAGE_PLACEHOLDER;
+  const thumbnailUrl = productThumbnailUrlForPrimary(img, PRODUCT_IMAGE_PLACEHOLDER);
   const retail = numField(row.retail_price, 0);
   const wholesale = numField(row.wholesale_price, 0);
   const bid = row.brand_id != null && row.brand_id !== '' ? String(row.brand_id) : undefined;
@@ -332,6 +334,7 @@ function mapRowToChildProduct(
       row.is_raw_material === 1 ||
       row.is_raw_material === '1',
     imageUrl: img,
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
     images: imageUrls.length > 0 ? imageUrls : undefined,
   };
 }
@@ -715,6 +718,7 @@ export default function App() {
               : String(row.product_name ?? '');
           const imageUrls = allUrlsFromProductImages(row.product_images);
           const img = imageUrls[0] || PRODUCT_IMAGE_PLACEHOLDER;
+          const listThumb = productThumbnailUrlForPrimary(img, PRODUCT_IMAGE_PLACEHOLDER);
           const retail = numField(row.retail_price, 0);
           const wholesale = numField(row.wholesale_price, 0);
           const productDisc = numField(row.discount, 0);
@@ -805,6 +809,7 @@ export default function App() {
             onlineDiscountPctAtFetch: onlinePct,
             stock: stockByProduct[pid] ?? 0,
             imageUrl: img,
+            ...(listThumb ? { thumbnailUrl: listThumb } : {}),
             images: imageUrls.length > 0 ? imageUrls : undefined,
             manualUrl,
             isParent: children.length > 0,

@@ -1,6 +1,7 @@
 import type { CartItem, Product } from '../types';
 import { calculateTotal } from '../utils/priceCalc';
 import { DELIVERY_IMAGE_PLACEHOLDER } from '../utils/offlineImagePlaceholders';
+import { productThumbnailUrlForPrimary } from '../utils/productThumbnailUrl';
 
 export const DELIVERY_SERVICE_CART_ITEM_ID = '__delivery_service__';
 
@@ -63,6 +64,7 @@ export function parseDeliveryServiceProductRow(
   if (!nm) return null;
   const urls = urlsFromProductImages(row.product_images);
   const img = urls[0] || DELIVERY_IMAGE_PLACEHOLDER;
+  const listThumb = productThumbnailUrlForPrimary(img, DELIVERY_IMAGE_PLACEHOLDER);
   const retail = numField(row.retail_price, 0);
   return {
     id: pid,
@@ -75,6 +77,7 @@ export function parseDeliveryServiceProductRow(
     receivedPrice: numField(row.received_price, 0),
     stock: 999_999,
     imageUrl: img,
+    ...(listThumb ? { thumbnailUrl: listThumb } : {}),
     images: urls.length > 0 ? urls : undefined,
     productType: 1,
   };

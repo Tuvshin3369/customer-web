@@ -4,7 +4,7 @@ import {
   Hash, ChevronDown, AlertCircle, Loader2, Check,
 } from 'lucide-react';
 import { registerCustomerWithPhone, registerCustomerWithGoogleId } from '../lib/customersRegister';
-import { loadGoogleIdentityScript, requestGoogleUserSub } from '../lib/googleIdentity';
+import { formatGoogleDisplayName, loadGoogleIdentityScript, requestGoogleUserProfile } from '../lib/googleIdentity';
 
 interface FormErrors {
   phone?: string;
@@ -131,11 +131,12 @@ export function RegisterModal({ isOpen, onClose, onLoginClick }: RegisterModalPr
         throw new Error('Google OAuth тохируулаагүй байна. (VITE_GOOGLE_CLIENT_ID)');
       }
       await loadGoogleIdentityScript();
-      const sub = await requestGoogleUserSub(clientId);
-      await registerCustomerWithGoogleId(sub, {
+      const profile = await requestGoogleUserProfile(clientId);
+      await registerCustomerWithGoogleId(profile.sub, {
         phone: phoneTrim || undefined,
         organizationName: orgName.trim() || undefined,
         register: orgRegNumber.trim() || undefined,
+        googleName: formatGoogleDisplayName(profile),
       });
       setRegisterSuccessKind('google');
     } catch (err: unknown) {

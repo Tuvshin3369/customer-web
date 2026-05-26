@@ -210,6 +210,8 @@ export type RegisterCustomerWithGoogleOptions = {
   phone?: string;
   organizationName?: string;
   register?: string;
+  /** Google profile-ийн харуулах нэр */
+  googleName?: string;
 };
 
 /** Google OAuth-оор авсан `sub` (google_id). Утас, нууц үг заавал биш. */
@@ -243,8 +245,15 @@ export async function registerCustomerWithGoogleId(
 
   const orgName = opts?.organizationName?.trim() ?? '';
   const reg = opts?.register?.trim() ?? '';
-  if (orgName) body.organization_name = orgName;
+  const googleName = opts?.googleName?.trim() ?? '';
+  if (orgName) {
+    body.organization_name = orgName;
+  } else if (googleName) {
+    /** Байгууллагын нэр оруулаагүй Google бүртгэл — admin жагсаалтад харагдана */
+    body.organization_name = googleName;
+  }
   if (reg) body.register = reg;
+  if (googleName) body.google_name = googleName;
 
   /** DB-д password_hash NOT NULL үед — зөвхөн Google-ээр нэвтэрнэ, утасны нууц ашиглахгүй */
   const { default: bcrypt } = await import('bcryptjs');
@@ -468,6 +477,65 @@ export async function verifyGoogleCustomerLogin(googleId: string): Promise<{ isW
   }
   const row = json[0] as { is_worker?: unknown };
   return { isWorker: row.is_worker === true };
+}
+
+/** Хуучин Google бүртгэлд `google_name` / `organization_name` хоосон бол profile-оос нөхнө. */
+export async function ensureCustomerGoogleName(googleId: string, googleName: string): Promise<void> {
+  const name = googleName.trim();
+  if (!name) return;
+
+  const { restBase, anonKey } = getSupabaseRest();
+  const id = googleId.trim();
+  if (!id) return;
+
+  const readHeaders = restHeaders(anonKey);
+  const readById = (select: string) =>
+    fetch(
+      `${restBase}/rest/v1/customers?${new URLSearchParams({
+        select,
+        google_id: `eq.${id}`,
+        limit: '1',
+      }).toString()}`,
+      { headers: readHeaders },
+    );
+
+  let readRes = await readById('organization_name,google_name');
+  let rows = await parseJsonSafely(readRes);
+  if (!readRes.ok && /google_name/i.test(formatPostgrestError(rows, readRes))) {
+    readRes = await readById('organization_name');
+    rows = await parseJsonSafely(readRes);
+  }
+  if (!readRes.ok || !Array.isArray(rows) || rows.length === 0) {
+    if (!readRes.ok) {
+      console.warn('ensureCustomerGoogleName read:', formatPostgrestError(rows, readRes));
+    }
+    return;
+  }
+
+  const row = rows[0] as { organization_name?: string | null; google_name?: string | null };
+  const patch: Record<string, string> = {};
+  if (!row.google_name?.trim()) patch.google_name = name;
+  if (!row.organization_name?.trim()) patch.organization_name = name;
+  if (Object.keys(patch).length === 0) return;
+
+  const patchQ = new URLSearchParams({ google_id: `eq.${id}` });
+  let patchRes = await fetch(`${restBase}/rest/v1/customers?${patchQ.toString()}`, {
+    method: 'PATCH',
+    headers: { ...restHeaders(anonKey), Prefer: 'return=minimal' },
+    body: JSON.stringify(patch),
+  });
+  let patchJson = await parseJsonSafely(patchRes);
+  if (!patchRes.ok && patch.google_name && /google_name/i.test(formatPostgrestError(patchJson, patchRes))) {
+    patchRes = await fetch(`${restBase}/rest/v1/customers?${patchQ.toString()}`, {
+      method: 'PATCH',
+      headers: { ...restHeaders(anonKey), Prefer: 'return=minimal' },
+      body: JSON.stringify({ organization_name: name }),
+    });
+    patchJson = await parseJsonSafely(patchRes);
+  }
+  if (!patchRes.ok) {
+    console.warn('ensureCustomerGoogleName patch:', formatPostgrestError(patchJson, patchRes));
+  }
 }
 
 function buildProfileFieldsPatch(

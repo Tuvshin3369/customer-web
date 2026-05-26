@@ -1,7 +1,9 @@
+import { memo } from 'react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { Product } from '../types';
 import { productCardDiscountPercent } from '../lib/customerLoyaltyContext';
 import { displayStock } from '../utils/displayStock';
+import { productListImageProps } from '../utils/productThumbnailUrl';
 
 interface ProductCardProps {
   product: Product;
@@ -12,7 +14,7 @@ interface ProductCardProps {
   foamLoyaltyPreviewPercent?: number;
 }
 
-export function ProductCard({
+export const ProductCard = memo(function ProductCard({
   product,
   onConfigureProduct,
   foamLoyaltyPreviewPercent,
@@ -67,11 +69,12 @@ export function ProductCard({
       {/* ── Image area ───────────────────────────────────────────────────── */}
       <div className="relative aspect-[3/4] bg-gray-100">
         <ImageWithFallback
-          src={product.imageUrl}
+          {...productListImageProps(product.imageUrl, product.thumbnailUrl)}
           alt={product.name}
           className="w-full h-full object-cover"
           draggable={false}
           loading="lazy"
+          decoding="async"
         />
 
         {/* Discount badge — top-left only */}
@@ -104,4 +107,4 @@ export function ProductCard({
 
     </div>
   );
-}
+});

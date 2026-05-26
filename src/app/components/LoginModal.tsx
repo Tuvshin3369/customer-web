@@ -3,6 +3,7 @@ import { X, Eye, EyeOff, Phone, Lock, AlertCircle, Loader2 } from 'lucide-react'
 import {
   verifyCustomerLogin,
   verifyGoogleCustomerLogin,
+  ensureCustomerGoogleName,
   formatCustomerPhoneDisplay,
 } from '../lib/customersRegister';
 import {
@@ -133,6 +134,7 @@ export function LoginModal({ isOpen, onClose, onRegisterClick, onLoginSuccess, o
         await loadGoogleIdentityScript();
         const profile = await requestGoogleUserProfile(clientId);
         const { isWorker } = await verifyGoogleCustomerLogin(profile.sub);
+        await ensureCustomerGoogleName(profile.sub, formatGoogleDisplayName(profile));
         onLoginSuccess?.({
           phoneDisplay: formatGoogleDisplayName(profile),
           googleId: profile.sub,

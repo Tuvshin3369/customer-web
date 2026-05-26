@@ -5,6 +5,7 @@
 import type { Product } from '../types';
 import { plannedStandardSaleBaseFromRetail } from './customerPrivilegedPricing';
 import { PRODUCT_IMAGE_PLACEHOLDER } from './offlineImagePlaceholders';
+import { productThumbnailUrlForPrimary } from './productThumbnailUrl';
 
 const RESOLVED_PRODUCT_SELECT =
   'id,product_name,product_images,product_manual,retail_price,wholesale_price,received_price,discount,category_id,brand_id,store_id,display_order,is_coded_paint,is_foam_range,is_calculate_length,ratio,waste,group_id,service_price,is_pigment,related_product_1_id,related_product_2_id,related_product_3_id,related_product_4_id';
@@ -68,6 +69,7 @@ function mapRowToProduct(
   if (!nm) return null;
   const imageUrls = allUrlsFromProductImages(row.product_images);
   const img = imageUrls[0] || PRODUCT_IMAGE_PLACEHOLDER;
+  const listThumb = productThumbnailUrlForPrimary(img, PRODUCT_IMAGE_PLACEHOLDER);
   const retail = numField(row.retail_price, 0);
   const wholesale = numField(row.wholesale_price, 0);
   const productDisc = numField(row.discount, 0);
@@ -117,6 +119,7 @@ function mapRowToProduct(
     onlineDiscountPctAtFetch: onlinePct,
     stock,
     imageUrl: img,
+    ...(listThumb ? { thumbnailUrl: listThumb } : {}),
     images: imageUrls.length > 0 ? imageUrls : undefined,
     manualUrl,
   };

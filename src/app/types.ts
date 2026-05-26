@@ -40,6 +40,8 @@ export interface ChildProduct {
   /** products.received_price */
   receivedPrice?: number;
   imageUrl: string;
+  /** Derived `…/thumbs/<file>` — list/grid only; galleries use {@link imageUrl} / {@link images} */
+  thumbnailUrl?: string;
   images?: string[];   // optional gallery images; falls back to [imageUrl]
 }
 
@@ -74,6 +76,8 @@ export interface Product {
   stock: number;
   imageCount?: number;
   imageUrl: string;
+  /** Derived thumb URL for grids/cards — optional for backward compatibility */
+  thumbnailUrl?: string;
   images?: string[];
   /** products.product_manual — заавар (ихэнхдээ PDF URL) */
   manualUrl?: string;

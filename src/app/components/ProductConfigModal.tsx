@@ -16,6 +16,7 @@ import type { CustomerLoyaltyContext } from '../lib/customerLoyaltyContext';
 import { applyLoyaltyToProduct, applyFoamCatalogUnitToLoyalty, foamCatalogDiscountPercent } from '../utils/customerPrivilegedPricing';
 import { ProductManualSheet } from './ProductManualSheet';
 import { displayStock } from '../utils/displayStock';
+import { productListImageProps } from '../utils/productThumbnailUrl';
 
 interface ProductConfigModalProps {
   product: Product | null;
@@ -667,6 +668,7 @@ export function ProductConfigModal({
             brandId: c.brandId ?? product.brandId,
             stock: c.stock,
             imageUrl: c.imageUrl,
+            ...(c.thumbnailUrl ? { thumbnailUrl: c.thumbnailUrl } : {}),
             images: c.images,
             productType: 1,
             store_id: product.store_id,
@@ -747,9 +749,11 @@ export function ProductConfigModal({
               className="relative w-16 h-16 rounded-xl overflow-hidden bg-gray-100 shrink-0"
             >
               <ImageWithFallback
-                src={effectiveProduct.imageUrl}
+                {...productListImageProps(effectiveProduct.imageUrl, effectiveProduct.thumbnailUrl)}
                 alt={effectiveProduct.name}
                 className="w-full h-full object-cover"
+                loading="lazy"
+                decoding="async"
               />
 
               {product.is_foam_range &&
@@ -1134,9 +1138,11 @@ export function ProductConfigModal({
                         className="w-10 h-10 rounded-lg overflow-hidden bg-gray-100 shrink-0"
                       >
                         <ImageWithFallback
-                          src={child.imageUrl}
+                          {...productListImageProps(child.imageUrl, child.thumbnailUrl)}
                           alt={child.name}
                           className="w-full h-full object-cover"
+                          loading="lazy"
+                          decoding="async"
                         />
                       </div>
 
@@ -1260,6 +1266,8 @@ export function ProductConfigModal({
                   src={src}
                   alt={`${effectiveProduct.name} — ${i + 1}`}
                   className="w-full h-auto object-contain bg-gray-50 block min-h-[120px]"
+                  loading="lazy"
+                  decoding="async"
                 />
               ))}
             </div>
