@@ -4,6 +4,7 @@ import { Product, ChildProduct, CartItem } from '../types';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 import { displayStock } from '../utils/displayStock';
 import { productListImageProps } from '../utils/productThumbnailUrl';
+import { remainingStockForProduct } from '../utils/cartStockLimits';
 
 interface ChildSelectionModalProps {
   parentProduct: Product | null;
@@ -11,6 +12,7 @@ interface ChildSelectionModalProps {
   onClose: () => void;
   onAddItems: (items: CartItem[]) => void;
   brandName?: string;
+  cartItems?: CartItem[];
 }
 
 export function ChildSelectionModal({
@@ -19,6 +21,7 @@ export function ChildSelectionModal({
   onClose,
   onAddItems,
   brandName,
+  cartItems = [],
 }: ChildSelectionModalProps) {
   const [mounted, setMounted] = useState(false);
   const [visible, setVisible] = useState(false);
@@ -72,7 +75,11 @@ export function ChildSelectionModal({
   function setQty(childId: number, delta: number, maxStock: number) {
     setQuantities((prev) => {
       const cur = prev[childId] ?? 0;
-      const next = Math.max(0, Math.min(maxStock, cur + delta));
+      const child = children.find((c) => c.id === childId);
+      const cap = child
+        ? remainingStockForProduct(cartItems, child.id, child.stock)
+        : maxStock;
+      const next = Math.max(0, Math.min(cap, cur + delta));
       return { ...prev, [childId]: next };
     });
   }
@@ -186,6 +193,7 @@ export function ChildSelectionModal({
               key={child.id}
               child={child}
               quantity={quantities[child.id] ?? 0}
+              maxQuantity={remainingStockForProduct(cartItems, child.id, child.stock)}
               onDecrement={() => setQty(child.id, -1, child.stock)}
               onIncrement={() => setQty(child.id, +1, child.stock)}
             />
@@ -224,12 +232,13 @@ export function ChildSelectionModal({
 interface ChildRowProps {
   child: ChildProduct;
   quantity: number;
+  maxQuantity: number;
   onDecrement: () => void;
   onIncrement: () => void;
 }
 
-function ChildRow({ child, quantity, onDecrement, onIncrement }: ChildRowProps) {
-  const isMaxed = quantity >= child.stock;
+function ChildRow({ child, quantity, maxQuantity, onDecrement, onIncrement }: ChildRowProps) {
+  const isMaxed = quantity >= maxQuantity;
   const isSelected = quantity > 0;
 
   return (

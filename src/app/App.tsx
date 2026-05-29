@@ -51,6 +51,10 @@ import {
 } from './utils/customerPrivilegedPricing';
 import { PRODUCT_IMAGE_PLACEHOLDER } from './utils/offlineImagePlaceholders';
 import { productThumbnailUrlForPrimary } from './utils/productThumbnailUrl';
+import {
+  clampCartLineQuantity,
+  clampNewCartItem,
+} from './utils/cartStockLimits';
 
 const SELECTED_STORE_STORAGE_KEY = 'customer-web-selected-store-id';
 
@@ -1093,14 +1097,38 @@ export default function App() {
     if (cartItems.length === 0 && selectedStoreId) {
       setActiveCartStoreId(selectedStoreId);
     }
-    setCartItems((prev) => [...prev, item]);
+    setCartItems((prev) => {
+      const clamped = clampNewCartItem(item, prev);
+      if (!clamped) return prev;
+      return [
+        ...prev,
+        {
+          ...clamped,
+          totalPrice: calculateTotal(clamped.product, clamped.config, clamped.quantity),
+        },
+      ];
+    });
   }
 
   function handleAddChildItems(items: CartItem[]) {
     if (cartItems.length === 0 && items.length > 0 && selectedStoreId) {
       setActiveCartStoreId(selectedStoreId);
     }
-    setCartItems((prev) => [...prev, ...items]);
+    setCartItems((prev) => {
+      let next = prev;
+      for (const item of items) {
+        const clamped = clampNewCartItem(item, next);
+        if (!clamped) continue;
+        next = [
+          ...next,
+          {
+            ...clamped,
+            totalPrice: calculateTotal(clamped.product, clamped.config, clamped.quantity),
+          },
+        ];
+      }
+      return next;
+    });
   }
 
   function handleUpdateQuantity(cartItemId: string, quantity: number) {
@@ -1108,7 +1136,8 @@ export default function App() {
       prev.map(item => {
         if (item.cartItemId !== cartItemId) return item;
         if (item.product.is_service) return item;
-        return { ...item, quantity, totalPrice: calculateTotal(item.product, item.config, quantity) };
+        const qty = clampCartLineQuantity(item, prev, quantity);
+        return { ...item, quantity: qty, totalPrice: calculateTotal(item.product, item.config, qty) };
       }),
     );
   }
@@ -1439,6 +1468,7 @@ export default function App() {
         isOpen={configProduct !== null}
         onClose={() => setConfigProduct(null)}
         onConfirm={handleAddConfiguredItem}
+        cartItems={cartItems}
         storeId={selectedStoreId}
         brandId={selectedBrandId || undefined}
         onlineDiscountPercent={configProduct?.onlineDiscountPctAtFetch ?? 0}
@@ -1449,6 +1479,7 @@ export default function App() {
         isOpen={parentProduct !== null}
         onClose={() => setParentProduct(null)}
         onAddItems={handleAddChildItems}
+        cartItems={cartItems}
         brandName={activeBrandDisplayName}
       />
       <MyOrdersPage

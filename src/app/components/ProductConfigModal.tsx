@@ -17,12 +17,15 @@ import { applyLoyaltyToProduct, applyFoamCatalogUnitToLoyalty, foamCatalogDiscou
 import { ProductManualSheet } from './ProductManualSheet';
 import { displayStock } from '../utils/displayStock';
 import { productListImageProps } from '../utils/productThumbnailUrl';
+import { remainingStockForProduct } from '../utils/cartStockLimits';
 
 interface ProductConfigModalProps {
   product: Product | null;
   isOpen: boolean;
   onClose: () => void;
   onConfirm: (item: CartItem) => void;
+  /** Сагсанд байгаа мөрүүд — үлдэгдлийн хязгаар тооцоолно */
+  cartItems?: CartItem[];
   /** Кодоор бараа солих REST дуудлага */
   storeId?: string | null;
   brandId?: string;
@@ -67,7 +70,8 @@ function QtyInput({ value, onChange, min = 1, max = 99999 }: QtyInputProps) {
       <button
         type="button"
         onClick={() => onChange(Math.max(min, value - 1))}
-        className="w-8 h-8 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-red-500 hover:bg-red-50 transition-colors active:scale-90"
+        disabled={value <= min}
+        className="w-8 h-8 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-red-500 hover:bg-red-50 transition-colors active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed"
       >
         <Minus className="w-3.5 h-3.5" />
       </button>
@@ -94,7 +98,8 @@ function QtyInput({ value, onChange, min = 1, max = 99999 }: QtyInputProps) {
       <button
         type="button"
         onClick={() => onChange(Math.min(max, value + 1))}
-        className="w-8 h-8 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors active:scale-90"
+        disabled={value >= max}
+        className="w-8 h-8 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed"
       >
         <Plus className="w-3.5 h-3.5" />
       </button>
@@ -156,6 +161,7 @@ export function ProductConfigModal({
   isOpen,
   onClose,
   onConfirm,
+  cartItems = [],
   storeId = null,
   brandId: brandIdProp,
   onlineDiscountPercent = 0,
@@ -255,6 +261,11 @@ export function ProductConfigModal({
     const r = product.ratio;
     return typeof r === 'number' && r > 0 && Number.isFinite(r) ? r : null;
   }, [product]);
+
+  const maxParentQty = useMemo(() => {
+    if (!effectiveProduct || effectiveProduct.is_service === true) return 99999;
+    return remainingStockForProduct(cartItems, effectiveProduct.id, effectiveProduct.stock);
+  }, [cartItems, effectiveProduct]);
 
   // Derive image list — always at least the primary imageUrl (кодоор сольсон барааны зураг)
   const productImages = effectiveProduct
@@ -487,8 +498,24 @@ export function ProductConfigModal({
         }
       }
     }
+    if (effectiveProduct && effectiveProduct.is_service !== true) {
+      if (maxParentQty <= 0) {
+        e.quantity = 'Үлдэгдэл хүрэлцэхгүй (сагсанд бүрэн байна).';
+      } else if (quantity > maxParentQty) {
+        e.quantity = `Нэмэх боломжтой ${maxParentQty} ширхэг (үлдэгдэл ${displayStock(effectiveProduct.stock)}).`;
+      }
+    }
     return e;
-  }, [type, length, height, product?.is_foam_range, foamComputedStandardUnit]);
+  }, [
+    type,
+    length,
+    height,
+    product?.is_foam_range,
+    foamComputedStandardUnit,
+    effectiveProduct,
+    maxParentQty,
+    quantity,
+  ]);
 
   const currentErrors = useMemo(() => validate(), [validate]);
   const isValid = Object.keys(currentErrors).length === 0;
@@ -583,9 +610,13 @@ export function ProductConfigModal({
       allTouched.height = true;
       if (product?.is_foam_range === true) allTouched.foam = true;
     }
+    allTouched.quantity = true;
     setTouched(allTouched);
 
     if (!isValid || !product || !effectiveProduct || !loyaltyOverlaidEffective) return;
+    if (maxParentQty <= 0) return;
+
+    const safeQuantity = Math.min(quantity, maxParentQty);
 
     let productForCart: Product = { ...loyaltyOverlaidEffective, productType: type };
     if (product.is_foam_range === true && foamLoyaltyPricing?.loyaltyPriceMode === 'v1') {
@@ -633,9 +664,9 @@ export function ProductConfigModal({
     onConfirm({
       cartItemId: `${productForCart.id}-${Date.now()}`,
       product: productForCart,
-      quantity,
+      quantity: safeQuantity,
       config,
-      totalPrice: liveTotal,
+      totalPrice: calculateTotal(productForCart, config, safeQuantity),
     });
 
     // ── 2. Additionally add each selected child as a separate cart row ──────
@@ -644,7 +675,9 @@ export function ProductConfigModal({
         .slice(0, 4)
         .filter((c) => (childQtys[c.id] ?? 0) > 0)
         .forEach((c) => {
-          const qty = childQtys[c.id]!;
+          const maxChild = remainingStockForProduct(cartItems, c.id, c.stock);
+          const qty = Math.min(childQtys[c.id] ?? 0, maxChild);
+          if (qty <= 0) return;
           const listRetail = c.retailPrice ?? c.price;
           const childProduct: Product = {
             id: c.id,
@@ -1064,8 +1097,11 @@ export function ProductConfigModal({
                 value={quantity}
                 onChange={setQuantity}
                 min={1}
-                max={99999}
+                max={Math.max(1, maxParentQty)}
               />
+              {touched.quantity && currentErrors.quantity && (
+                <p className="w-full text-xs text-red-500">{currentErrors.quantity}</p>
+              )}
               {/* Stock / summary — type 3 shows total length instead of stock */}
               {type === 3 ? (
                 <span className="text-xs text-gray-500 shrink-0">
@@ -1123,7 +1159,8 @@ export function ProductConfigModal({
                 {product.children.slice(0, 4).map((child) => {
                   const cQty = childQtys[child.id] ?? 0;
                   const isSelected = cQty > 0;
-                  const isMaxed = cQty >= child.stock;
+                  const maxChildQty = remainingStockForProduct(cartItems, child.id, child.stock);
+                  const isMaxed = cQty >= maxChildQty;
                   return (
                     <div
                       key={child.id}
@@ -1203,7 +1240,7 @@ export function ProductConfigModal({
                             if (isNaN(parsed) || parsed < 0) return;
                             setChildQtys((p) => ({
                               ...p,
-                              [child.id]: Math.min(child.stock, parsed),
+                              [child.id]: Math.min(maxChildQty, parsed),
                             }));
                           }}
                           onBlur={(e) => {
@@ -1226,7 +1263,7 @@ export function ProductConfigModal({
                           onClick={() =>
                             setChildQtys((p) => ({
                               ...p,
-                              [child.id]: Math.min(child.stock, (p[child.id] ?? 0) + 1),
+                              [child.id]: Math.min(maxChildQty, (p[child.id] ?? 0) + 1),
                             }))
                           }
                           disabled={isMaxed}

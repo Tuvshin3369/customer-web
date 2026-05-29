@@ -8,6 +8,7 @@ import { configLabel, calculateTotal, getBasePrice } from '../utils/priceCalc';
 import { foamCatalogDiscountPercent } from '../utils/customerPrivilegedPricing';
 import { ProductGallery } from './ProductGallery';
 import { productListImageProps } from '../utils/productThumbnailUrl';
+import { maxQuantityForCartLine } from '../utils/cartStockLimits';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -196,6 +197,7 @@ export function CartDrawer({
                 <CartItemCard
                   key={item.cartItemId}
                   item={item}
+                  allItems={items}
                   configLabel={configLabel(item.product, item.config)}
                   onRemove={() => onRemoveItem(item.cartItemId)}
                   onDecrement={() => {
@@ -307,6 +309,7 @@ export function CartDrawer({
 // ─── Single cart item card ────────────────────────────────────────────────────
 interface CartItemCardProps {
   item: CartItem;
+  allItems: CartItem[];
   configLabel: string | null;
   onRemove: () => void;
   onDecrement: () => void;
@@ -319,6 +322,7 @@ const CART_QTY_MAX = 99999;
 
 function CartItemCard({
   item,
+  allItems,
   configLabel: label,
   onRemove,
   onDecrement,
@@ -330,6 +334,8 @@ function CartItemCard({
   const [qtyRaw, setQtyRaw] = useState(String(item.quantity));
   const unitPrice = getBasePrice(item.product);
   const isServiceLine = item.product.is_service === true;
+  const maxQty = isServiceLine ? CART_QTY_MAX : maxQuantityForCartLine(item, allItems);
+  const isAtMax = !isServiceLine && item.quantity >= maxQty;
 
   useEffect(() => {
     setQtyRaw(String(item.quantity));
@@ -338,7 +344,8 @@ function CartItemCard({
   function commitQtyInput(str: string) {
     const parsed = parseInt(str, 10);
     if (!Number.isNaN(parsed)) {
-      onQuantityCommit(Math.min(CART_QTY_MAX, Math.max(1, parsed)));
+      const cap = isServiceLine ? CART_QTY_MAX : maxQty;
+      onQuantityCommit(Math.min(cap, Math.max(1, parsed)));
     } else {
       setQtyRaw(String(item.quantity));
     }
@@ -440,7 +447,8 @@ function CartItemCard({
                     if (v !== '') {
                       const n = parseInt(v, 10);
                       if (!Number.isNaN(n)) {
-                        onQuantityCommit(Math.min(CART_QTY_MAX, Math.max(1, n)));
+                        const cap = isServiceLine ? CART_QTY_MAX : maxQty;
+                        onQuantityCommit(Math.min(cap, Math.max(1, n)));
                       }
                     }
                   }}
@@ -451,7 +459,8 @@ function CartItemCard({
                 />
                 <button
                   onClick={onIncrement}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors active:scale-90"
+                  disabled={isAtMax}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg bg-white shadow-sm text-gray-600 hover:text-blue-600 hover:bg-blue-50 transition-colors active:scale-90 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-gray-600 disabled:hover:bg-white"
                 >
                   <Plus className="w-3.5 h-3.5" />
                 </button>

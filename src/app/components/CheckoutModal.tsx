@@ -31,6 +31,10 @@ import {
   looksLikeCoordinateAddress,
   reverseGeocodeLatLng,
 } from '../lib/reverseGeocodeGoogle';
+import {
+  findCartStockViolations,
+  formatCartStockViolationMessage,
+} from '../utils/cartStockLimits';
 
 function normalizePhoneDigits(raw: unknown): string | null {
   if (raw == null) return null;
@@ -831,6 +835,12 @@ export function CheckoutModal({
       setSubmitOrderError(
         'Дэлгүүрийн мэдээлэл олдсонгүй. Сагсандаа бараа нэмээд дахин оролдоно уу.',
       );
+      return;
+    }
+
+    const stockViolations = findCartStockViolations(items);
+    if (stockViolations.length > 0) {
+      setSubmitOrderError(formatCartStockViolationMessage(stockViolations));
       return;
     }
 
