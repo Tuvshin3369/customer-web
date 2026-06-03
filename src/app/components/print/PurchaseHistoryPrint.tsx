@@ -425,7 +425,7 @@ function OrderSection({ order, className }: { order: GroupedPrintOrder; classNam
         <tbody>
           {order.products.map((p, ri) => (
             <tr key={ri} className={ri % 2 === 0 ? 'ph-row-even' : 'ph-row-odd'}>
-              <td style={prodCell(0, ri)}>{p.name}</td>
+              <td style={prodCell(0, ri)}>{p.printName ?? p.name}</td>
               <td style={prodCell(1, ri)}>{p.quantity}</td>
               <td style={prodCell(2, ri)}>{fmt(p.price)}</td>
               <td style={prodCell(3, ri)}>{fmt(p.price * p.quantity)}</td>

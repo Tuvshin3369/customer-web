@@ -4,6 +4,8 @@ export interface PrintProduct {
   name:     string;
   quantity: number;
   price:    number;
+  /** Хэвлэлд — «Зарлагын баримт» формат; байхгүй бол `name` */
+  printName?: string;
 }
 
 /** Minimal HistoryItem interface — compatible with any app's local HistoryItem */

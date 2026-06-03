@@ -988,6 +988,7 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
 
       const qty = Math.max(1, Math.round(num(r.product_number ?? r.quantity ?? r.qty ?? 1)));
       const price = resolveProductPrice(r);
+      const meta = pid ? prodHints.metaByPid[pid] : undefined;
       const fields = saleExtraFieldsFromRow(r);
       const extraInfo = buildSaleLineExtraInfo(
         meta,

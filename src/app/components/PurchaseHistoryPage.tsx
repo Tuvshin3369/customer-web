@@ -29,6 +29,7 @@ interface HistoryProduct {
   quantity: number;
   price: number;
   extraInfo?: string | null;
+  printName?: string;
 }
 type CreditType = 'paid' | 'partial' | 'credit';
 
