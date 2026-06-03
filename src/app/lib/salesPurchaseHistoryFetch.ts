@@ -16,6 +16,12 @@ import {
   fetchCustomerProfileByPhone,
   resolveCustomerIdForOnlineOrder,
 } from './customersRegister';
+import {
+  buildSaleLineExtraInfo,
+  type SaleLineExtraFields,
+  type SaleLineProductMeta,
+} from '../utils/saleLineExtraInfo';
+import { buildSaleProductPrintName } from '../utils/saleProductPrintName';
 
 export type PurchaseCreditType = 'paid' | 'partial' | 'credit';
 
@@ -23,6 +29,10 @@ export interface PurchaseHistorySaleProduct {
   name: string;
   quantity: number;
   price: number;
+  /** Барааны нэрний доор — өнгийн код, хөөс, урт (сагс/захиалга шиг) */
+  extraInfo?: string | null;
+  /** Хэвлэл — «Зарлагын баримт» форматтай нэр */
+  printName?: string;
 }
 
 /** Зээл товчны панел — дансны мэдээлэл (гол салбар) */
@@ -503,15 +513,20 @@ async function fetchStoresByIds(
 async function fetchProductsStoreAndName(
   env: SupabaseEnv,
   ids: string[],
-): Promise<{ storeByPid: Record<string, string>; nameByPid: Record<string, string> }> {
+): Promise<{
+  storeByPid: Record<string, string>;
+  nameByPid: Record<string, string>;
+  metaByPid: Record<string, SaleLineProductMeta>;
+}> {
   const storeByPid: Record<string, string> = {};
   const nameByPid: Record<string, string> = {};
-  if (ids.length === 0) return { storeByPid, nameByPid };
+  const metaByPid: Record<string, SaleLineProductMeta> = {};
+  if (ids.length === 0) return { storeByPid, nameByPid, metaByPid };
   const headers = restGetHeaders(env.anonKey);
   for (let i = 0; i < ids.length; i += FETCH_CHUNK) {
     const chunk = ids.slice(i, i + FETCH_CHUNK);
     const q = new URLSearchParams({
-      select: 'id,store_id,product_name',
+      select: 'id,store_id,product_name,is_coded_paint,is_foam_range,is_calculate_length,waste,is_pigment',
       id: `in.(${chunk.join(',')})`,
     });
     try {
@@ -529,12 +544,68 @@ async function fetchProductsStoreAndName(
           typeof row.product_name === 'string' ? row.product_name.trim() : '';
         if (sid) storeByPid[id] = sid;
         if (nm) nameByPid[id] = nm;
+        const wasteRaw = num(row.waste);
+        metaByPid[id] = {
+          is_coded_paint: row.is_coded_paint === true,
+          is_foam_range: row.is_foam_range === true,
+          is_calculate_length: row.is_calculate_length === true,
+          is_pigment:
+            row.is_pigment === true ||
+            row.is_pigment === 1 ||
+            row.is_pigment === '1',
+          waste: wasteRaw > 0 ? wasteRaw : null,
+        };
       }
     } catch {
       /* */
     }
   }
-  return { storeByPid, nameByPid };
+  return { storeByPid, nameByPid, metaByPid };
+}
+
+async function fetchCodedPaintCodesByIds(
+  env: SupabaseEnv,
+  ids: string[],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (ids.length === 0) return out;
+  const headers = restGetHeaders(env.anonKey);
+  for (let i = 0; i < ids.length; i += FETCH_CHUNK) {
+    const chunk = ids.slice(i, i + FETCH_CHUNK);
+    const q = new URLSearchParams({
+      select: 'id,color_code',
+      id: `in.(${chunk.join(',')})`,
+    });
+    try {
+      const res = await fetch(`${env.restBase}/rest/v1/coded_paints?${q.toString()}`, { headers });
+      const json = await parseJsonSafely(res);
+      if (!res.ok || !Array.isArray(json)) continue;
+      for (const row of json as Record<string, unknown>[]) {
+        const id = row.id != null ? String(row.id) : '';
+        const code =
+          row.color_code != null ? String(row.color_code).trim() : '';
+        if (id && code) out[id] = code;
+      }
+    } catch {
+      /* RLS / сүлжээ */
+    }
+  }
+  return out;
+}
+
+function saleExtraFieldsFromRow(row: Record<string, unknown>): SaleLineExtraFields {
+  const coded_paint_id =
+    row.coded_paint_id != null && String(row.coded_paint_id).trim()
+      ? String(row.coded_paint_id).trim()
+      : null;
+  const foam_size =
+    typeof row.foam_size === 'string' && row.foam_size.trim()
+      ? row.foam_size.trim()
+      : null;
+  const lengthRaw = row.length_meter;
+  const length_meter =
+    lengthRaw != null && Number.isFinite(Number(lengthRaw)) ? Number(lengthRaw) : null;
+  return { coded_paint_id, foam_size, length_meter };
 }
 
 /** branch_id → store_id (зээлийн дансны гол салбар сонгоход) */
@@ -787,13 +858,25 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
   const prodIds = [...new Set(
     rows.map((r) => (r.product_id != null ? String(r.product_id).trim() : '')).filter(Boolean),
   )];
+  const codedPaintIds = [
+    ...new Set(
+      rows
+        .map((r) =>
+          r.coded_paint_id != null && String(r.coded_paint_id).trim()
+            ? String(r.coded_paint_id).trim()
+            : '',
+        )
+        .filter(Boolean),
+    ),
+  ];
 
   const usePersonalBank = !params.isLoggedIn;
 
-  const [branchStoreById, empHints, prodHints, hasCompanyRegister] = await Promise.all([
+  const [branchStoreById, empHints, prodHints, codedCodeById, hasCompanyRegister] = await Promise.all([
     fetchBranchStoreIdByIds(env, branchIds),
     fetchEmployeesBranchHints(env, empIds),
     fetchProductsStoreAndName(env, prodIds),
+    fetchCodedPaintCodesByIds(env, codedPaintIds),
     usePersonalBank
       ? Promise.resolve(false)
       : fetchCustomerHasCompanyRegister({
@@ -905,7 +988,15 @@ export async function fetchSalesPurchaseHistoryGrouped(params: {
 
       const qty = Math.max(1, Math.round(num(r.product_number ?? r.quantity ?? r.qty ?? 1)));
       const price = resolveProductPrice(r);
-      return { name: nm, quantity: qty, price };
+      const fields = saleExtraFieldsFromRow(r);
+      const extraInfo = buildSaleLineExtraInfo(
+        meta,
+        fields,
+        codedCodeById,
+        { requireProductFlags: false },
+      );
+      const printName = buildSaleProductPrintName(nm, meta, fields, codedCodeById);
+      return { name: nm, quantity: qty, price, extraInfo, printName };
     });
 
     const orderTotal = products.reduce((s, p) => s + p.price * p.quantity, 0);

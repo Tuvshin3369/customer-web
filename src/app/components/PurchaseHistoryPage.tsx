@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
@@ -24,7 +24,12 @@ import {
 } from '../lib/salesPurchaseHistoryFetch';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-interface HistoryProduct { name: string; quantity: number; price: number; }
+interface HistoryProduct {
+  name: string;
+  quantity: number;
+  price: number;
+  extraInfo?: string | null;
+}
 type CreditType = 'paid' | 'partial' | 'credit';
 
 interface HistoryItem {
@@ -497,7 +502,14 @@ function HistoryCard({
               <tbody>
                 {item.products.map((p, i) => (
                   <tr key={i} className={i > 0 ? 'border-t border-gray-100' : ''}>
-                    <td className="text-sm text-gray-800 py-2 pr-3 leading-snug">{p.name}</td>
+                    <td className="text-sm text-gray-800 py-2 pr-3 leading-snug">
+                      <div>{p.name}</div>
+                      {p.extraInfo && (
+                        <div className="text-[10px] text-blue-500 font-medium mt-0.5 leading-relaxed">
+                          {p.extraInfo}
+                        </div>
+                      )}
+                    </td>
                     <td className="text-sm text-center text-gray-600 tabular-nums py-2">{p.quantity}</td>
                     <td className="text-sm text-right text-gray-600 tabular-nums py-2 pr-3">{fmt(p.price)}</td>
                     <td className="text-sm text-right text-gray-700 tabular-nums py-2">{fmt(p.price * p.quantity)}</td>

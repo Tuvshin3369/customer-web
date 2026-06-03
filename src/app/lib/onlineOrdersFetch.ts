@@ -17,6 +17,11 @@
  */
 
 import { phoneToInt64, resolveCustomerIdForOnlineOrder } from './customersRegister';
+import {
+  buildSaleLineExtraInfo,
+  type SaleLineExtraFields,
+  type SaleLineProductMeta,
+} from '../utils/saleLineExtraInfo';
 
 export type DeliveryType = 'pickup' | 'taxi' | 'delivery';
 
@@ -140,13 +145,8 @@ interface OnlineOrderRow {
   length_meter: number | null;
 }
 
-interface ProductMeta {
+interface ProductMeta extends SaleLineProductMeta {
   name: string;
-  is_coded_paint: boolean;
-  is_foam_range: boolean;
-  is_calculate_length: boolean;
-  /** is_foam_range үед талбай = h × w × waste */
-  waste: number | null;
 }
 
 function nullableNum(v: unknown): number | null {
@@ -301,21 +301,6 @@ async function fetchCodedPaintCodesByIds(
   return out;
 }
 
-/** "h,w" эсвэл "h" → {h, w?} */
-function parseFoamSize(value: string): { h: number; w?: number } | null {
-  const parts = value.split(',');
-  const h = Number(parts[0]);
-  if (!Number.isFinite(h)) return null;
-  if (parts.length === 1) return { h };
-  const w = Number(parts[1]);
-  if (!Number.isFinite(w)) return { h };
-  return { h, w };
-}
-
-function formatNumber(n: number): string {
-  return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
-}
-
 /**
  * Барааны нэрний доор харагдах нэмэлт мэдээллийн мөр. Зөвхөн products-ын төрлийн
  * туг + тухайн online_orders-ын талбар хоёулаа бөглөгдсөн үед буцаана.
@@ -325,34 +310,12 @@ function buildExtraInfo(
   row: OnlineOrderRow,
   codeById: Record<string, string>,
 ): string | null {
-  if (!meta) return null;
-
-  if (meta.is_coded_paint && row.coded_paint_id) {
-    const code = codeById[row.coded_paint_id];
-    if (code) return `Өнгөний код: ${code}`;
-  }
-
-  if (meta.is_foam_range && row.foam_size) {
-    const dims = parseFoamSize(row.foam_size);
-    if (dims) {
-      const parts: string[] = [`Өндөр: ${formatNumber(dims.h)}см`];
-      if (dims.w != null) parts.push(`Өргөн: ${formatNumber(dims.w)}см`);
-      const waste =
-        meta.waste != null && meta.waste > 0 ? meta.waste : 1;
-      const area =
-        dims.w != null ? dims.h * dims.w * waste : dims.h * waste;
-      if (Number.isFinite(area) && area > 0) {
-        parts.push(`Талбай: ${formatNumber(area)}`);
-      }
-      return parts.join(' · ');
-    }
-  }
-
-  if (meta.is_calculate_length && row.length_meter != null) {
-    return `Урт: ${formatNumber(row.length_meter)}см`;
-  }
-
-  return null;
+  const fields: SaleLineExtraFields = {
+    coded_paint_id: row.coded_paint_id,
+    foam_size: row.foam_size,
+    length_meter: row.length_meter,
+  };
+  return buildSaleLineExtraInfo(meta, fields, codeById, { requireProductFlags: true });
 }
 
 const ONLINE_ORDER_SELECT =
